@@ -30,7 +30,7 @@ pip install -r requirements.txt
 ## Spuštění
 
 ```bash
-python main.py --output-dir samples_out
+python vst-get.py --output-dir samples_out
 ```
 
 Program při startu:
@@ -74,7 +74,7 @@ Příklady: `m060-vel0-f44.wav`, `m060-vel7-f44.wav`, `m021-vel3-f48.wav`
 | `--threshold-db` | `-50` | Práh ticha pro ořez v dB (zkus `-40` pro agresivnější ořez) |
 | `--note-start` | `21` | První MIDI nota (A0) |
 | `--note-end` | `108` | Poslední MIDI nota (C8) |
-| `--midi-port` | `loopMIDI Port` | Název MIDI výstupního portu |
+| `--midi-port` | `loopMIDI port` | Název MIDI výstupního portu |
 | `--midi-channel` | `0` | MIDI kanál 0–15 |
 | `--no-normalize` | — | Vypne per-nota normalizaci |
 

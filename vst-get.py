@@ -13,7 +13,7 @@ Filename    : m<NNN>-vel<V>-f<SR>.wav
               SR  = sample rate kHz (48 or 44)
 
 Usage:
-    python main.py --output-dir samples_out [options]
+    python vst-get.py --output-dir samples_out [options]
 """
 
 import argparse
