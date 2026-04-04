@@ -231,14 +231,24 @@ def process_sample(
     noise_rms = estimate_noise_rms(mono, fs, preroll_ms=preroll_ms)
 
     # ------------------------------------------------------------------
-    # Step 3: onset detection (noise-floor-relative)
+    # Step 3: onset detection (noise-floor-relative, after preroll only)
+    #
+    # Search starts from the END of the preroll, not from frame 0.
+    # Searching from 0 risks triggering on WASAPI initialisation bursts
+    # or VST idle noise in the first few milliseconds — a 10 ms window
+    # there can exceed noise_floor + snr_db and set start_frame = 0,
+    # leaving the full preroll + instrument attack delay in the output.
+    # The preroll is guaranteed silence by design; onset can only happen
+    # after note-on, which is sent at the end of the preroll period.
     # ------------------------------------------------------------------
-    start_frame = find_onset(
-        mono, fs,
+    preroll_samples = min(int(preroll_ms / 1000.0 * fs), len(mono))
+    onset_rel = find_onset(
+        mono[preroll_samples:], fs,
         noise_rms=noise_rms,
         snr_db=onset_snr_db,
         window_ms=onset_window_ms,
     )
+    start_frame = preroll_samples + onset_rel
 
     if start_frame >= len(mono):
         log.info("  → onset nenalezen (celý záznam pod prahem), přeskočeno")

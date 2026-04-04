@@ -53,6 +53,10 @@ def main() -> int:
         "--output-dir", required=True,
         help="Výstupní adresář pro WAV soubory",
     )
+    parser.add_argument(
+        "--do-not-prompt", action="store_true",
+        help="Přeskočit potvrzení Enterem — použij pokud je VST již spuštěno",
+    )
 
     # --- MIDI ---
     parser.add_argument(
@@ -129,10 +133,13 @@ def main() -> int:
         midi_out = open_midi_port(args.midi_port)
 
         print(f"\nVýstupní adresář: {output_dir.resolve()}")
-        input(
-            "Ujistěte se, že VST je spuštěno a routováno na zvolené výstupní zařízení.\n"
-            "Stiskněte Enter pro zahájení...\n"
-        )
+        if args.do_not_prompt:
+            print("--do-not-prompt: zahájení bez potvrzení.")
+        else:
+            input(
+                "Ujistěte se, že VST je spuštěno a routováno na zvolené výstupní zařízení.\n"
+                "Stiskněte Enter pro zahájení...\n"
+            )
 
         recorder = Recorder(p, dev_idx, dev_rate, dev_ch)
 
