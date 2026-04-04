@@ -25,7 +25,7 @@ Automaticky sampluje standalone VST nástroj přes všechny noty v rozsahu piana
 pip install -r requirements.txt
 ```
 
-`pyaudiowpatch` i `python-rtmidi` mají bundlované nativní knihovny (PortAudio DLL, RtMidi) — žádné další systémové závislosti nejsou potřeba.
+`pyaudiowpatch` i `python-rtmidi` mají bundlované nativní knihovny — žádné další systémové závislosti nejsou potřeba.
 
 ## Spuštění
 
@@ -66,91 +66,98 @@ Příklady: `m060-vel0-f44.wav`, `m060-vel7-f44.wav`, `m021-vel3-f48.wav`
 | 6      | 111          |
 | 7      | 127          |
 
+## Zpracování každého samplu
+
+Pro každou notu a velocity vrstvu probíhá následující pipeline:
+
+### 1. Mono pracovní kopie a normalizace
+
+Ze stereo záznamu se vytvoří mono kopie součtem L + R kanálů. Ta se normalizuje tak, aby peak dosáhl **–6 dBFS**. Tato kopie slouží výhradně pro analýzu (nikdy se neukládá).
+
+### 2. Detekce začátku (onset)
+
+Na normalizované mono kopii se hledá začátek signálu pomocí RMS analýzy v oknech po 1 ms. Výchozí práh je **–42 dB** relativně k peaku. Výsledný `start_frame` se aplikuje na originální stereo záznam.
+
+### 3. Detekce peaku
+
+Od `start_frame` se hledá okno s maximálním RMS (1 ms okna). Výsledkem je `peak_frame` a `peak_rms` — referenční hodnoty pro detekci fade-outu.
+
+### 4. Detekce fade-outu (binary subdivision průměrného výkonu)
+
+Od `peak_frame` do konce záznamu se iterativně halvingem hledá cut-out bod:
+
+1. Rozděl úsek na **`--fadeout-coarse-chunks`** oken (výchozí 16) — velikost okna se přizpůsobuje délce záznamu od peaku: `initial_hop = len(segment) / 16`
+2. Pro každé okno spočítej průměrný výkon `P = E / n_vzorků` (= RMS²) — neúplné okno na konci záznamu se vždy zahrne a počítá se přes skutečný počet vzorků
+3. Z oken splňujících podmínku `P ≤ peak_rms² × fadeout_ratio` vyber **nejdřívější** (první přechod pod práh, ne nejtiší bod)
+4. Zúži hledání na toto okno, halvuj → **50 % → 25 % → … → 1 vzorek**
+5. Start posledního okna = `end_frame`
+
+**Fallback:** Pokud žádné okno nesplní podmínku, použije se okno s nejmenším průměrným výkonem (signál odezněl, ale nepřekročil práh). Zaznamenáno v logu jako `(fallback: min-power)`.
+
+### 5. Zero-start ochrana (prevence lupnutí)
+
+Střih na nenulové hodnotě způsobuje lupnutí při přehrávání. Po ořezu stereo originálu se proto:
+
+1. Zkontroluje amplituda prvního vzorku `A = max(|L|, |R|)`
+2. Pokud `A < --zero-threshold` (výchozí 0.001 ≈ –60 dBFS) → vzorek začíná na nule, nic se nedělá
+3. Jinak se aplikuje **cosine fade-in** délky `max(1, round(max_fade_in × A))` vzorků
+   - Při plné amplitudě (A≈1) se použije plných `--max-fade-in` vzorků; při malé amplitudě se délka zkrátí úměrně
+
+Poznámka: dopředné hledání zero crossing se záměrně neprovádí — posunutí startu vpřed by mohlo oříznout začátek transientu, což je auditivně výraznější vada než krátký fade-in.
+
+### Konzolový výstup
+
+Pro každý vzorek se loguje průběh celého pipeline:
+
+```
+[  42/704]  nota= 60  vrstva=3  vel= 64
+  Normalizace : gain=+14.3 dB  (originální peak=-20.3 dBFS → cíl -6.0 dBFS)
+  Onset       : start_frame=28  t=29.2 ms  (práh=-42 dB)
+  Peak        : frame=312  t=325.0 ms  RMS=-6.0 dBFS
+  Peak (abs)  : frame=340  t=354.2 ms
+  Fade-out    : ratio=0.10  E_threshold=...
+    kolo 1  [100 ms]  31 oken  min-energie okno č.18  E=-41.2 dB
+    kolo 2  [ 50 ms]   2 oken  min-energie okno č. 2  E=-43.8 dB
+    ...
+    → end_frame=3187  t=3320.8 ms
+  Zero-start  : cosine fade-in 17 vzorků  (A=0.57, max_fade_in=30)
+  Délka       : 3291.6 ms
+  Uloženo     : m060-vel3-f48.wav  (3291.6 ms)
+```
+
 ## Parametry příkazové řádky
 
 | Parametr | Výchozí | Popis |
 |----------|---------|-------|
 | `--output-dir` | *(povinné)* | Výstupní adresář |
-| `--threshold-db` | `-50` | Práh ticha pro ořez v dB (zkus `-40` pro agresivnější ořez) |
 | `--note-start` | `21` | První MIDI nota (A0) |
 | `--note-end` | `108` | Poslední MIDI nota (C8) |
 | `--midi-port` | `loopMIDI port` | Název MIDI výstupního portu |
 | `--midi-channel` | `0` | MIDI kanál 0–15 |
-| `--no-normalize` | — | Vypne per-nota normalizaci |
-
-## Normalizace
-
-Výchozí chování: pro každou notu se nahrají všechny velocity vrstvy, pak se všechny normalizují **stejným faktorem** tak, aby nejhlasitější vrstva dosáhla -1 dBFS. Relativní dynamika mezi vrstvami je zachována.
-
-Vypnutí normalizace: `--no-normalize`
-
-## Trim ticha
-
-Každý záznam se automaticky ořeže:
-- **začátek** — odstraní ticho před attackem noty
-- **konec** — odstraní decay/dozvuk pod prahem (viz `--threshold-db`)
-
-Pokud je výsledek prázdný (nota na daném rozsahu nehraje), soubor se neuloží.
-
-### Jak detekce funguje (audio_trim.py)
-
-Nahrávka každé noty začíná 150ms před odesláním MIDI note-on (preroll), aby útok nebyl oříznutý. Po nahrání se preroll ticho odstraní takto:
-
-1. Celý záznam se rozdělí na okna délky **1 ms**
-2. V každém okně se vypočítá **RMS** (efektivní hodnota hlasitosti)
-3. RMS se převede na **dB relativně k peaku** celého záznamu
-4. **Začátek** = první okno, kde RMS překročí `--threshold-db` (výchozí -50 dB)
-5. **Konec** = poslední okno nad prahem
-
-Výsledek: sampl začíná přesně na transientu kladívka (přesnost 1 ms), bez prerollového šumu.
-
-### Použití audio_trim.py v jiném projektu
-
-Soubor `audio_trim.py` lze zkopírovat do libovolného projektu a použít samostatně — nevyžaduje žádné další soubory z tohoto projektu.
-
-```python
-import wave
-import numpy as np
-from audio_trim import SilenceTrimmer
-
-# Načtení WAV souboru
-with wave.open("muj_záznam.wav") as wf:
-    sample_rate = wf.getframerate()
-    channels = wf.getnchannels()
-    raw = wf.readframes(wf.getnframes())
-
-# Převod na numpy pole (float32, hodnoty -1.0 až +1.0)
-data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32767.0
-if channels > 1:
-    data = data.reshape(-1, channels)  # stereo: tvar (pocet_vzorku, 2)
-
-# Ořez ticha
-trimmer = SilenceTrimmer(threshold_db=-50.0)
-trimmed, start_sample, end_sample = trimmer.trim(data, sample_rate)
-
-if len(trimmed) == 0:
-    print("Záznam je celý tichý, nic k uložení.")
-else:
-    print(f"Ořez: začátek na {start_sample/sample_rate*1000:.1f} ms, "
-          f"konec na {end_sample/sample_rate*1000:.0f} ms")
-
-    # Uložení oříznutého souboru (16-bit PCM)
-    data_int = (trimmed * 32767.0).clip(-32768, 32767).astype(np.int16)
-    with wave.open("oríznutý.wav", "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(data_int.tobytes())
-```
-
-**Parametr `threshold_db`** — čím vyšší (méně záporné) číslo, tím agresivnější ořez:
-- `-50` (výchozí) — bezpečné, odstraní pouze šum a velmi tichý preroll
-- `-40` — agresivnější, vhodné pokud zůstává příliš dlouhý dozvuk
+| `--threshold-db` | `-42` | Onset práh (dB rel. k normalizovanému peaku mono kopie) |
+| `--fadeout-ratio` | `0.1` | Fade-out: `P ≤ peak_rms² × ratio` |
+| `--fadeout-coarse-chunks` | `16` | Počet počátečních oken binary subdivision (přizpůsobuje se délce záznamu) |
+| `--max-fade-in` | `30` | Max. délka cosine fade-in na začátku (vzorky, škáluje s amplitudou) |
+| `--zero-threshold` | `0.001` | Amplituda pod kterou je start považován za nulu (≈ –60 dBFS) |
 
 ## Časový odhad
 
 - Každá nota: 29 s note-on + 1 s release = 30 s
 - Plný piano rozsah (88 not × 8 vrstev): ~6 hodin
+
+## Struktura modulů
+
+| Modul | Obsah |
+|-------|-------|
+| `audio_trim.py` | `SilenceTrimmer` — standalone reusable silence trimmer |
+| `peak_detector.py` | `find_onset()`, `find_peak()`, `find_fadeout()` — standalone detekce |
+| `sample_processor.py` | Celý processing pipeline pro jeden vzorek |
+| `wasapi_recorder.py` | `Recorder`, `list_loopback_devices`, `select_loopback_device` |
+| `midi_utils.py` | `open_midi_port` |
+| `wav_io.py` | `save_wav` |
+| `sampler.py` | `record_one`, `sample_all`, konstanty |
+| `vst-get.py` | CLI entry point |
+| `diagnose.py` | Diagnostika loopback zařízení |
 
 ## Diagnostika
 
