@@ -83,21 +83,31 @@ def main() -> int:
     # --- Fade-out detection ---
     parser.add_argument(
         "--fadeout-ratio", type=float, default=0.1,
-        help="Fade-out: okno s E ≤ peak_energy × ratio je cut-out bod",
+        help="Fade-out: P ≤ peak_rms² × ratio je cut-out bod",
     )
     parser.add_argument(
         "--fadeout-coarse-chunks", type=int, default=16,
-        help="Počet počátečních oken binary subdivision (výchozí 16 = 1/16 délky od peaku)",
+        help="Počet počátečních oken binary subdivision (1/N délky od peaku do konce)",
+    )
+    parser.add_argument(
+        "--fadeout-min-window-ms", type=float, default=100.0,
+        help="Minimální okno binary subdivision v ms (výchozí 100 ms, kryje basové frekvence)",
     )
 
-    # --- Zero-start ochrana ---
+    # --- Normalizace ---
     parser.add_argument(
-        "--max-fade-in", type=int, default=30,
-        help="Max. délka cosine fade-in na začátku samplu (vzorky, škáluje s amplitudou)",
+        "--max-gain-db", type=float, default=40.0,
+        help="Maximální gain normalizace v dB (výchozí 40 dB, omezuje zesílení šumu u tichých vrstev)",
+    )
+
+    # --- Zero-edge ochrana (start i konec) ---
+    parser.add_argument(
+        "--max-fade-samples", type=int, default=30,
+        help="Max. délka cosine fade na začátku a konci samplu (vzorky, škáluje s amplitudou)",
     )
     parser.add_argument(
         "--zero-threshold", type=float, default=0.001,
-        help="Amplituda pod kterou je start považován za nulu (výchozí 0.001 ≈ –60 dBFS)",
+        help="Amplituda pod kterou je hrana považována za nulu (výchozí 0.001 ≈ –60 dBFS)",
     )
 
     args = parser.parse_args()
@@ -131,8 +141,10 @@ def main() -> int:
                 threshold_db=args.threshold_db,
                 fadeout_ratio=args.fadeout_ratio,
                 fadeout_coarse_chunks=args.fadeout_coarse_chunks,
-                max_fade_in=args.max_fade_in,
+                fadeout_min_window_ms=args.fadeout_min_window_ms,
+                max_fade_samples=args.max_fade_samples,
                 zero_threshold=args.zero_threshold,
+                max_gain_db=args.max_gain_db,
             )
         except KeyboardInterrupt:
             print("\n\nPřerušeno uživatelem.")

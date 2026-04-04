@@ -125,16 +125,18 @@ def sample_all(
     threshold_db: float = -42.0,
     fadeout_ratio: float = 0.1,
     fadeout_coarse_chunks: int = 16,
-    max_fade_in: int = 30,
+    fadeout_min_window_ms: float = 100.0,
+    max_fade_samples: int = 30,
     zero_threshold: float = 0.001,
+    max_gain_db: float = 40.0,
 ) -> None:
     """
     Record all notes and velocity layers and save processed WAV files.
 
     Each raw recording is passed through process_sample() which handles
     onset detection, fade-out detection (binary subdivision of average power),
-    and zero-start protection.  If a processed result is silent, the file is
-    not saved.
+    zero-start and zero-end protection.  If a processed result is silent,
+    the file is not saved.
 
     Output filename format: ``m<NNN>-vel<V>-f<SR>.wav``
     where NNN = zero-padded MIDI note number, V = layer index,
@@ -159,10 +161,14 @@ def sample_all(
         Fade-out power threshold as fraction of peak power (default 0.1).
     fadeout_coarse_chunks : int
         Initial window count for binary subdivision (default 16).
-    max_fade_in : int
-        Maximum cosine fade-in length in samples (default 30).
+    fadeout_min_window_ms : float
+        Minimum subdivision window in ms (default 100 ms).
+    max_fade_samples : int
+        Maximum cosine fade length for start and end edges (default 30).
     zero_threshold : float
-        Amplitude below which start is considered "at zero" (default 0.001).
+        Amplitude below which an edge is considered "at zero" (default 0.001).
+    max_gain_db : float
+        Maximum normalisation gain in dB (default 40 dB).
     """
     if velocity_layers is None:
         velocity_layers = VELOCITY_LAYERS
@@ -197,8 +203,10 @@ def sample_all(
                 threshold_db=threshold_db,
                 fadeout_ratio=fadeout_ratio,
                 fadeout_coarse_chunks=fadeout_coarse_chunks,
-                max_fade_in=max_fade_in,
+                fadeout_min_window_ms=fadeout_min_window_ms,
+                max_fade_samples=max_fade_samples,
                 zero_threshold=zero_threshold,
+                max_gain_db=max_gain_db,
             )
 
             if processed is None:

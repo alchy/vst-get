@@ -196,14 +196,16 @@ def find_fadeout(
     peak_rms: float,
     fadeout_ratio: float = 0.1,
     coarse_chunks: int = 16,
+    min_window_ms: float = 100.0,
 ) -> int:
     """
     Locate the fade-out cut point using binary subdivision of average power.
 
     The search region is ``mono[peak_frame:]``.  The initial window size is
     ``len(search_region) // coarse_chunks`` samples so it scales with the
-    actual recording length.  Windows are halved each round until a single
-    sample is reached.
+    actual recording length.  Windows are halved each round until they reach
+    *min_window_ms* — subdivision stops there to prevent sub-period windows
+    for low-frequency content (e.g. bass notes at A0 = 27.5 Hz, period 36 ms).
 
     At every level the algorithm selects the **earliest** window whose average
     power satisfies ``power ≤ peak_rms² × fadeout_ratio``.  This converges to
@@ -231,6 +233,10 @@ def find_fadeout(
     coarse_chunks : int
         Number of initial windows the search region is divided into
         (default 16).  Larger values → finer initial resolution.
+    min_window_ms : float
+        Minimum window size in ms — subdivision stops when the window reaches
+        this size (default 100 ms).  Prevents sub-period analysis for bass
+        frequencies; 100 ms covers ≥ 2 full periods of A0 (27.5 Hz).
 
     Returns
     -------
@@ -249,21 +255,22 @@ def find_fadeout(
 
     initial_hop = max(1, len(segment) // coarse_chunks)
     initial_ms = initial_hop / fs * 1000.0
+    min_hop = max(1, int(min_window_ms / 1000.0 * fs))
 
     log.info(
         "  Fade-out    : ratio=%.2f  P_threshold=%.2e (%.1f dB)  "
-        "počáteční okno=%.1f ms (%d vzorků = 1/%d od peaku do konce)",
+        "počáteční okno=%.1f ms (%d vzorků = 1/%d od peaku)  min okno=%.0f ms",
         fadeout_ratio, threshold_power, threshold_db,
-        initial_ms, initial_hop, coarse_chunks,
+        initial_ms, initial_hop, coarse_chunks, min_window_ms,
     )
 
     seg_start = 0
     seg_end = len(segment)
-    hop = initial_hop
+    hop = max(initial_hop, min_hop)
     round_num = 0
     fallback_used = False
 
-    while hop >= 1:
+    while hop >= min_hop:
         round_num += 1
         win_ms = hop / fs * 1000.0
         seg = segment[seg_start:seg_end]
