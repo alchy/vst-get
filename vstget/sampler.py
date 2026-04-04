@@ -32,9 +32,9 @@ from pathlib import Path
 import mido
 import numpy as np
 
-from sample_processor import process_sample
-from wasapi_recorder import Recorder
-from wav_io import save_wav
+from .sample_processor import process_sample
+from .wasapi_recorder import Recorder
+from .wav_io import save_wav
 
 # ---------------------------------------------------------------------------
 # Public constants

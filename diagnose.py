@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pyaudiowpatch as pyaudio
 
-from wasapi_recorder import Recorder, list_loopback_devices
-from wav_io import save_wav
+from vstget.wasapi_recorder import Recorder, list_loopback_devices
+from vstget.wav_io import save_wav
 
 SECONDS = 5
 OUT_DIR = Path("diag_out")

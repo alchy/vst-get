@@ -30,7 +30,7 @@ pip install -r requirements.txt
 ## Spuštění
 
 ```bash
-python vst-get.py --output-dir samples_out
+python run-vst-get.py --output-dir samples_out
 ```
 
 Program při startu:
@@ -155,19 +155,21 @@ Pro každý vzorek se loguje průběh celého pipeline:
 - Každá nota: 29 s note-on + 1 s release = 30 s
 - Plný piano rozsah (88 not × 8 vrstev): ~6 hodin
 
-## Struktura modulů
+## Struktura projektu
 
-| Modul | Obsah |
-|-------|-------|
-| `peak_detector.py` | `estimate_noise_rms()`, `find_onset()`, `find_peak()`, `find_fadeout()` — standalone detekce |
-| `sample_processor.py` | Celý processing pipeline pro jeden vzorek |
-| `audio_trim.py` | `SilenceTrimmer` — standalone reusable silence trimmer (legacy) |
-| `wasapi_recorder.py` | `Recorder`, `list_loopback_devices`, `select_loopback_device` |
-| `midi_utils.py` | `open_midi_port` |
-| `wav_io.py` | `save_wav` |
-| `sampler.py` | `record_one`, `sample_all`, konstanty |
-| `vst-get.py` | CLI entry point |
-| `diagnose.py` | Diagnostika loopback zařízení |
+```
+vst-get/
+├── run-vst-get.py          # CLI entry point
+├── diagnose.py             # Diagnostika loopback zařízení
+└── vstget/                 # Knihovna (importovatelné moduly)
+    ├── peak_detector.py    # estimate_noise_rms(), find_onset(), find_peak(), find_fadeout()
+    ├── sample_processor.py # Celý processing pipeline pro jeden vzorek
+    ├── sampler.py          # record_one(), sample_all(), konstanty
+    ├── wasapi_recorder.py  # Recorder, list_loopback_devices, select_loopback_device
+    ├── midi_utils.py       # open_midi_port()
+    ├── wav_io.py           # save_wav()
+    └── audio_trim.py       # SilenceTrimmer (legacy)
+```
 
 ## Diagnostika
 

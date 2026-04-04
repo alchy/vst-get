@@ -50,7 +50,7 @@ import logging
 
 import numpy as np
 
-from peak_detector import estimate_noise_rms, find_fadeout, find_onset, find_peak
+from .peak_detector import estimate_noise_rms, find_fadeout, find_onset, find_peak
 
 log = logging.getLogger(__name__)
 

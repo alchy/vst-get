@@ -23,9 +23,9 @@ from pathlib import Path
 
 import pyaudiowpatch as pyaudio
 
-from midi_utils import open_midi_port
-from sampler import PIANO_HIGH, PIANO_LOW, sample_all
-from wasapi_recorder import Recorder, select_loopback_device
+from vstget.midi_utils import open_midi_port
+from vstget.sampler import PIANO_HIGH, PIANO_LOW, sample_all
+from vstget.wasapi_recorder import Recorder, select_loopback_device
 
 # Force UTF-8 output on Windows consoles
 if sys.stdout.encoding.lower() != "utf-8":
