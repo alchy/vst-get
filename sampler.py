@@ -122,21 +122,24 @@ def sample_all(
     midi_channel: int = 0,
     velocity_layers: list[int] | None = None,
     # process_sample kwargs forwarded verbatim
-    threshold_db: float = -42.0,
-    fadeout_ratio: float = 0.1,
+    preroll_ms: float = 120.0,
+    onset_snr_db: float = 6.0,
+    onset_window_ms: float = 10.0,
+    peak_window_ms: float = 10.0,
+    fadeout_snr_db: float = 6.0,
     fadeout_coarse_chunks: int = 16,
     fadeout_min_window_ms: float = 100.0,
-    max_fade_samples: int = 30,
+    tail_fade_ms: float = 500.0,
+    max_fade_samples: int = 200,
     zero_threshold: float = 0.001,
-    max_gain_db: float = 40.0,
 ) -> None:
     """
     Record all notes and velocity layers and save processed WAV files.
 
     Each raw recording is passed through process_sample() which handles
-    onset detection, fade-out detection (binary subdivision of average power),
-    zero-start and zero-end protection.  If a processed result is silent,
-    the file is not saved.
+    onset detection, fade-out detection (binary subdivision), zero-start
+    and zero-end protection.  If a processed result is silent, the file
+    is not saved.
 
     Output filename format: ``m<NNN>-vel<V>-f<SR>.wav``
     where NNN = zero-padded MIDI note number, V = layer index,
@@ -155,10 +158,18 @@ def sample_all(
     midi_channel : int
     velocity_layers : list[int] or None
         MIDI velocity values per layer.  Defaults to ``VELOCITY_LAYERS``.
-    threshold_db : float
-        Onset RMS threshold in dB relative to normalised peak (default –42 dB).
-    fadeout_ratio : float
-        Fade-out power threshold as fraction of peak power (default 0.1).
+    preroll_ms : float
+        Duration of guaranteed-silent preroll used for noise floor
+        estimation (default 120 ms, within the 150 ms PREROLL).
+    onset_snr_db : float
+        Onset fires when RMS exceeds noise floor by this many dB (default 6).
+    onset_window_ms : float
+        RMS window for onset detection in ms (default 10 ms).
+    peak_window_ms : float
+        RMS window for peak detection in ms (default 10 ms).
+    fadeout_snr_db : float
+        Fade-out fires when RMS drops to within this many dB of noise
+        floor (default 6 dB).
     fadeout_coarse_chunks : int
         Initial window count for binary subdivision (default 16).
     fadeout_min_window_ms : float
@@ -167,8 +178,6 @@ def sample_all(
         Maximum cosine fade length for start and end edges (default 30).
     zero_threshold : float
         Amplitude below which an edge is considered "at zero" (default 0.001).
-    max_gain_db : float
-        Maximum normalisation gain in dB (default 40 dB).
     """
     if velocity_layers is None:
         velocity_layers = VELOCITY_LAYERS
@@ -200,13 +209,16 @@ def sample_all(
 
             processed = process_sample(
                 raw, sample_rate,
-                threshold_db=threshold_db,
-                fadeout_ratio=fadeout_ratio,
+                preroll_ms=preroll_ms,
+                onset_snr_db=onset_snr_db,
+                onset_window_ms=onset_window_ms,
+                peak_window_ms=peak_window_ms,
+                fadeout_snr_db=fadeout_snr_db,
                 fadeout_coarse_chunks=fadeout_coarse_chunks,
                 fadeout_min_window_ms=fadeout_min_window_ms,
+                tail_fade_ms=tail_fade_ms,
                 max_fade_samples=max_fade_samples,
                 zero_threshold=zero_threshold,
-                max_gain_db=max_gain_db,
             )
 
             if processed is None:

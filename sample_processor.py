@@ -6,17 +6,35 @@ returns a trimmed, click-free stereo array ready for export.
 
 Pipeline
 --------
-1.  Create a mono working copy:  mono = L + R
-2.  Normalize mono to –6 dBFS peak, gain capped at max_gain_db to prevent
-    excessive amplification of noise on very soft velocity layers.
-3.  Onset detection on mono (find_onset, RMS threshold, default –42 dB).
-4.  Peak detection on mono from onset forward (find_peak, 1 ms windows).
-5.  Fade-out detection on mono from peak forward (find_fadeout, earliest
-    window below power threshold; min window 100 ms; fallback: min-power).
-6.  Apply start_frame / end_frame to the original stereo recording.
-7.  Zero-start protection: cosine fade-in if first sample is not near zero.
-8.  Zero-end protection: cosine fade-out if last sample is not near zero.
-9.  Discard mono copy, return trimmed stereo original (or None if silent).
+1.  Mono working copy: mean(L, R)  — average, not sum.
+2.  Noise floor estimation from the preroll (guaranteed-silent period
+    at the start of the recording, before note-on).
+3.  Onset detection: first window whose RMS exceeds the noise floor by
+    onset_snr_db (noise-floor-relative, immune to normalization artifacts).
+4.  Peak detection: loudest RMS window from onset onward.
+5.  Fade-out detection: binary subdivision, threshold = noise floor +
+    fadeout_snr_db (noise-floor-relative, works for all velocity layers).
+6.  Trim the original stereo recording to [onset, fadeout].
+7.  Zero-start: cosine fade-in if first sample is not near zero.
+8.  Zero-end: cosine fade-out if last sample is not near zero.
+9.  Discard mono copy, return trimmed stereo (or None if silent).
+
+Key design decisions
+--------------------
+* No normalization.  Normalization amplifies the noise floor by up to
+  40 dB for quiet velocity layers, pushing it above the onset threshold
+  and causing the detector to fire on noise.  Thresholds are always
+  relative to the measured noise floor, so normalization is unnecessary.
+
+* mono = mean(L, R), not sum.  L+R doubles coherent signal amplitude
+  but also doubles the noise amplitude — the SNR is unchanged, but the
+  absolute level is 6 dB higher, which affects the dBFS numbers used in
+  log messages.  Averaging keeps per-channel semantics consistent.
+
+* Noise floor from preroll.  The sampler records PREROLL (150 ms) of
+  silence before sending note-on.  Measuring the RMS of the first
+  preroll_ms (default 120 ms) of that silence gives a reliable noise
+  floor for this specific recording, interface, and velocity layer.
 
 Example
 -------
@@ -32,13 +50,9 @@ import logging
 
 import numpy as np
 
-from peak_detector import find_fadeout, find_onset, find_peak
+from peak_detector import estimate_noise_rms, find_fadeout, find_onset, find_peak
 
 log = logging.getLogger(__name__)
-
-# Target peak level for the normalised mono working copy
-_TARGET_PEAK_DB = -6.0
-_TARGET_PEAK_AMP = 10.0 ** (_TARGET_PEAK_DB / 20.0)   # ≈ 0.5012
 
 
 # ---------------------------------------------------------------------------
@@ -46,49 +60,10 @@ _TARGET_PEAK_AMP = 10.0 ** (_TARGET_PEAK_DB / 20.0)   # ≈ 0.5012
 # ---------------------------------------------------------------------------
 
 def _to_mono(data: np.ndarray) -> np.ndarray:
-    """Sum all channels to mono (works for both mono and stereo input)."""
+    """Average all channels to mono (works for both mono and stereo input)."""
     if data.ndim == 1:
-        return data.copy().astype(np.float32)
-    return data.sum(axis=1).astype(np.float32)
-
-
-def _normalize(
-    mono: np.ndarray,
-    max_gain_db: float = 40.0,
-) -> tuple[np.ndarray, float, float]:
-    """
-    Normalise *mono* so that its peak amplitude equals _TARGET_PEAK_AMP,
-    with gain capped at *max_gain_db*.
-
-    The gain cap prevents extreme amplification of noise on very quiet
-    velocity layers where the signal-to-noise ratio is poor.  When the cap
-    is applied the resulting peak will be below –6 dBFS.
-
-    Returns
-    -------
-    (normalised, original_peak_db, gain_db)
-    """
-    peak = float(np.max(np.abs(mono)))
-    if peak == 0.0:
-        return mono.copy(), -np.inf, 0.0
-
-    original_peak_db = 20.0 * np.log10(peak)
-    ideal_gain = _TARGET_PEAK_AMP / peak
-    max_gain_amp = 10.0 ** (max_gain_db / 20.0)
-
-    if ideal_gain > max_gain_amp:
-        gain = max_gain_amp
-        actual_peak_db = original_peak_db + max_gain_db
-        log.info(
-            "  Normalizace : gain omezen na +%.0f dB  "
-            "(ideální gain %+.1f dB → výsledný peak=%.1f dBFS)",
-            max_gain_db, 20.0 * np.log10(ideal_gain), actual_peak_db,
-        )
-    else:
-        gain = ideal_gain
-
-    gain_db = 20.0 * np.log10(gain)
-    return (mono * gain).astype(np.float32), original_peak_db, gain_db
+        return data.astype(np.float32)
+    return (data.sum(axis=1) / data.shape[1]).astype(np.float32)
 
 
 def _cosine_fade(
@@ -157,7 +132,10 @@ def _zero_edge(
         log.info("  %s  : OK (A=%.5f < threshold=%.4f)", label, amp, zero_threshold)
         return data
 
-    fade_n = max(1, min(round(max_fade_samples * amp), len(data)))
+    # Use a fixed fade length — amplitude-proportional scaling (round(max × A))
+    # gives 1–2 samples for realistic end-of-note amplitudes (0.001–0.05),
+    # which is indistinguishable from a hard cut.
+    fade_n = max(1, min(max_fade_samples, len(data)))
     result = data.copy()
     _cosine_fade(result, fade_n, at_end=at_end)
 
@@ -176,14 +154,16 @@ def _zero_edge(
 def process_sample(
     data: np.ndarray,
     fs: int,
-    threshold_db: float = -42.0,
-    fadeout_ratio: float = 0.1,
+    preroll_ms: float = 120.0,
+    onset_snr_db: float = 6.0,
+    onset_window_ms: float = 10.0,
+    peak_window_ms: float = 10.0,
+    fadeout_snr_db: float = 6.0,
     fadeout_coarse_chunks: int = 16,
     fadeout_min_window_ms: float = 100.0,
-    peak_window_ms: float = 1.0,
-    max_fade_samples: int = 30,
+    tail_fade_ms: float = 500.0,
+    max_fade_samples: int = 200,
     zero_threshold: float = 0.001,
-    max_gain_db: float = 40.0,
 ) -> np.ndarray | None:
     """
     Process a single raw recorded sample through the full pipeline.
@@ -194,28 +174,39 @@ def process_sample(
         Raw stereo (or mono) float32 audio, shape (N,) or (N, channels).
     fs : int
         Sample rate in Hz.
-    threshold_db : float
-        Onset detection RMS threshold in dB relative to the normalised
-        mono peak (default –42 dB).
-    fadeout_ratio : float
-        Fade-out condition: ``power ≤ peak_rms² × fadeout_ratio``
-        (default 0.1 = 1/10 of peak power).
+    preroll_ms : float
+        Duration of preroll (guaranteed silence) at the start of the
+        recording in ms (default 120 ms — within the 150 ms PREROLL of
+        sampler.py).  Used to estimate the noise floor.
+    onset_snr_db : float
+        Onset fires when RMS exceeds the noise floor by this many dB
+        (default 6 dB).  Lower values detect quieter notes; higher
+        values reject more noise.  For instruments with very low SNR
+        (e.g. velocity layer 0 on bass notes) try 4–5 dB.
+    onset_window_ms : float
+        RMS window length for onset detection in ms (default 10 ms).
+        Larger values are more reliable for low-frequency content.
+    peak_window_ms : float
+        RMS window length for peak detection in ms (default 10 ms).
+    fadeout_snr_db : float
+        Fade-out fires when RMS drops to within this many dB of the
+        noise floor (default 6 dB ≈ 2× noise amplitude).
     fadeout_coarse_chunks : int
         Number of initial windows for binary subdivision (default 16).
     fadeout_min_window_ms : float
-        Minimum window size during binary subdivision in ms (default 100 ms).
-        Prevents sub-period analysis for bass frequencies.
-    peak_window_ms : float
-        Window size for onset/peak RMS calculations in ms (default 1 ms).
+        Minimum window during binary subdivision in ms (default 100 ms).
+        Prevents sub-period windows for bass frequencies (A0 ≈ 36 ms).
+    tail_fade_ms : float
+        Cosine fade duration in ms applied at the end of the recording
+        when the note has not decayed to the noise floor within the
+        recording window (default 500 ms).  This prevents a hard cut
+        when the binary subdivision fallback is triggered.
     max_fade_samples : int
-        Maximum cosine fade length in samples for both start and end;
-        actual length scales with edge amplitude (default 30).
+        Fixed cosine fade length in samples for zero-edge protection
+        at start and end (default 200 ≈ 4 ms at 48 kHz).
     zero_threshold : float
         Amplitude below which a sample edge is considered "at zero"
         (default 0.001 ≈ –60 dBFS).
-    max_gain_db : float
-        Maximum normalisation gain in dB (default 40 dB).  Caps amplification
-        for very quiet velocity layers to limit noise floor boost.
 
     Returns
     -------
@@ -226,27 +217,27 @@ def process_sample(
         return None
 
     # ------------------------------------------------------------------
-    # Step 1: mono working copy + normalise
+    # Step 1: mono working copy — average of all channels, no normalisation
     # ------------------------------------------------------------------
-    mono_raw = _to_mono(data)
-    mono, orig_peak_db, gain_db = _normalize(mono_raw, max_gain_db=max_gain_db)
-
-    log.info(
-        "  Normalizace : gain=%+.1f dB  (originální peak=%.1f dBFS → cíl %.1f dBFS)",
-        gain_db, orig_peak_db, _TARGET_PEAK_DB,
-    )
+    mono = _to_mono(data)
 
     if np.max(np.abs(mono)) == 0.0:
         log.info("  → záznam je tichý, přeskočeno")
         return None
 
     # ------------------------------------------------------------------
-    # Step 2: onset detection
+    # Step 2: noise floor from preroll
+    # ------------------------------------------------------------------
+    noise_rms = estimate_noise_rms(mono, fs, preroll_ms=preroll_ms)
+
+    # ------------------------------------------------------------------
+    # Step 3: onset detection (noise-floor-relative)
     # ------------------------------------------------------------------
     start_frame = find_onset(
         mono, fs,
-        threshold_db=threshold_db,
-        window_ms=peak_window_ms,
+        noise_rms=noise_rms,
+        snr_db=onset_snr_db,
+        window_ms=onset_window_ms,
     )
 
     if start_frame >= len(mono):
@@ -254,31 +245,22 @@ def process_sample(
         return None
 
     # ------------------------------------------------------------------
-    # Step 3: peak detection (from onset onward)
-    #
-    # Window size must match fadeout_min_window_ms so that peak_rms and
-    # the fade-out window powers are computed on the same time scale.
-    # Using 1 ms here (peak_window_ms) while fade-out uses 100 ms windows
-    # causes an apples-to-oranges comparison: a 1 ms window at a bass
-    # crest gives peak_rms ≈ A (instantaneous amplitude), whereas a 100 ms
-    # fade-out window gives power ≈ A²/2 (true RMS²).  The mismatch makes
-    # the threshold 2× too tight → note cut too short.
+    # Step 4: peak detection (from onset onward)
     # ------------------------------------------------------------------
-    peak_frame_rel, peak_rms = find_peak(
-        mono[start_frame:], fs,
-        window_ms=fadeout_min_window_ms,
+    peak_frame, _peak_rms = find_peak(
+        mono, fs,
+        start_frame=start_frame,
+        window_ms=peak_window_ms,
     )
-    peak_frame_abs = start_frame + peak_frame_rel
-    log.info("  Peak (abs)  : frame=%d  t=%.1f ms", peak_frame_abs, peak_frame_abs / fs * 1000.0)
 
     # ------------------------------------------------------------------
-    # Step 4: fade-out detection
+    # Step 5: fade-out detection (noise-floor-relative)
     # ------------------------------------------------------------------
-    end_frame = find_fadeout(
+    end_frame, fadeout_fallback = find_fadeout(
         mono, fs,
-        peak_frame=peak_frame_abs,
-        peak_rms=peak_rms,
-        fadeout_ratio=fadeout_ratio,
+        peak_frame=peak_frame,
+        noise_rms=noise_rms,
+        snr_db=fadeout_snr_db,
         coarse_chunks=fadeout_coarse_chunks,
         min_window_ms=fadeout_min_window_ms,
     )
@@ -288,17 +270,33 @@ def process_sample(
         return None
 
     # ------------------------------------------------------------------
-    # Step 5: trim original stereo
+    # Step 6: trim original stereo recording
     # ------------------------------------------------------------------
     result = data[start_frame:end_frame].copy()
 
     # ------------------------------------------------------------------
-    # Step 6: zero-start — cosine fade-in if first sample is not near zero
+    # Step 6b: tail fade when note didn't decay to noise floor
+    #
+    # The fallback is triggered when the binary subdivision never found a
+    # window below the fadeout threshold — the signal was still sustaining
+    # at the end of the recording.  A hard cut here produces a loud click.
+    # Apply a cosine fade over the last tail_fade_ms milliseconds instead.
+    # ------------------------------------------------------------------
+    if fadeout_fallback and len(result) > 0:
+        fade_n = min(len(result), max(1, int(tail_fade_ms / 1000.0 * fs)))
+        _cosine_fade(result, fade_n, at_end=True)
+        log.info(
+            "  Tail fade   : %.0f ms  (nota neodezněla do prahu šumu + %.0f dB)",
+            tail_fade_ms, fadeout_snr_db,
+        )
+
+    # ------------------------------------------------------------------
+    # Step 7: zero-start — cosine fade-in if first sample is not near zero
     # ------------------------------------------------------------------
     result = _zero_edge(result, max_fade_samples, zero_threshold, at_end=False)
 
     # ------------------------------------------------------------------
-    # Step 7: zero-end — cosine fade-out if last sample is not near zero
+    # Step 8: zero-end — cosine fade-out if last sample is not near zero
     # ------------------------------------------------------------------
     result = _zero_edge(result, max_fade_samples, zero_threshold, at_end=True)
 

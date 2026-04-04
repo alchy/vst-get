@@ -74,36 +74,44 @@ def main() -> int:
         help="Poslední MIDI nota (C8)",
     )
 
-    # --- Onset detection ---
+    # --- Šum a onset ---
     parser.add_argument(
-        "--threshold-db", type=float, default=-42.0,
-        help="Onset práh v dB relativně k normalizovanému peaku mono kopie",
+        "--preroll-ms", type=float, default=120.0,
+        help="Délka prerollu (ticha před note-on) pro odhad šumové podlahy v ms (výchozí 120 ms)",
+    )
+    parser.add_argument(
+        "--onset-snr-db", type=float, default=6.0,
+        help="Onset: SNR nad šumovou podlahou v dB (výchozí 6 dB; nižší = citlivější, pro vel0 zkus 4–5)",
+    )
+    parser.add_argument(
+        "--onset-window-ms", type=float, default=10.0,
+        help="RMS okno pro detekci onsetu v ms (výchozí 10 ms)",
     )
 
     # --- Fade-out detection ---
     parser.add_argument(
-        "--fadeout-ratio", type=float, default=0.1,
-        help="Fade-out: P ≤ peak_rms² × ratio je cut-out bod",
+        "--fadeout-snr-db", type=float, default=6.0,
+        help="Fade-out: SNR nad šumem pod který = ticho v dB (výchozí 6 dB ≈ 2× šum)",
     )
     parser.add_argument(
         "--fadeout-coarse-chunks", type=int, default=16,
-        help="Počet počátečních oken binary subdivision (1/N délky od peaku do konce)",
+        help="Počet počátečních oken binary subdivision (výchozí 16)",
     )
     parser.add_argument(
         "--fadeout-min-window-ms", type=float, default=100.0,
         help="Minimální okno binary subdivision v ms (výchozí 100 ms, kryje basové frekvence)",
     )
 
-    # --- Normalizace ---
+    # --- Tail fade (když nota neodezní do konce záznamu) ---
     parser.add_argument(
-        "--max-gain-db", type=float, default=40.0,
-        help="Maximální gain normalizace v dB (výchozí 40 dB, omezuje zesílení šumu u tichých vrstev)",
+        "--tail-fade-ms", type=float, default=500.0,
+        help="Délka fade-out v ms na konci záznamu pokud nota neodezněla (výchozí 500 ms)",
     )
 
     # --- Zero-edge ochrana (start i konec) ---
     parser.add_argument(
-        "--max-fade-samples", type=int, default=30,
-        help="Max. délka cosine fade na začátku a konci samplu (vzorky, škáluje s amplitudou)",
+        "--max-fade-samples", type=int, default=200,
+        help="Délka cosine fade na začátku a konci samplu v vzorcích (výchozí 200 ≈ 4 ms při 48 kHz)",
     )
     parser.add_argument(
         "--zero-threshold", type=float, default=0.001,
@@ -138,13 +146,15 @@ def main() -> int:
                 note_start=args.note_start,
                 note_end=args.note_end,
                 midi_channel=args.midi_channel,
-                threshold_db=args.threshold_db,
-                fadeout_ratio=args.fadeout_ratio,
+                preroll_ms=args.preroll_ms,
+                onset_snr_db=args.onset_snr_db,
+                onset_window_ms=args.onset_window_ms,
+                fadeout_snr_db=args.fadeout_snr_db,
                 fadeout_coarse_chunks=args.fadeout_coarse_chunks,
                 fadeout_min_window_ms=args.fadeout_min_window_ms,
+                tail_fade_ms=args.tail_fade_ms,
                 max_fade_samples=args.max_fade_samples,
                 zero_threshold=args.zero_threshold,
-                max_gain_db=args.max_gain_db,
             )
         except KeyboardInterrupt:
             print("\n\nPřerušeno uživatelem.")
