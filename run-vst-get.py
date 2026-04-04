@@ -57,6 +57,10 @@ def main() -> int:
         "--do-not-prompt", action="store_true",
         help="Přeskočit potvrzení Enterem — použij pokud je VST již spuštěno",
     )
+    parser.add_argument(
+        "--audio-device", type=int, default=None,
+        help="Index WASAPI loopback zařízení (přeskočí interaktivní výběr); výchozí = interaktivní",
+    )
 
     # --- MIDI ---
     parser.add_argument(
@@ -129,7 +133,7 @@ def main() -> int:
 
     p = pyaudio.PyAudio()
     try:
-        dev_idx, dev_rate, dev_ch = select_loopback_device(p)
+        dev_idx, dev_rate, dev_ch = select_loopback_device(p, auto_select=args.audio_device)
         midi_out = open_midi_port(args.midi_port)
 
         print(f"\nVýstupní adresář: {output_dir.resolve()}")

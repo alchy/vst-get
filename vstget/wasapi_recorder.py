@@ -35,6 +35,7 @@ def list_loopback_devices(p: pyaudio.PyAudio) -> list[tuple[int, dict]]:
 def select_loopback_device(
     p: pyaudio.PyAudio,
     max_channels: int = 2,
+    auto_select: int | None = None,
 ) -> tuple[int, int, int]:
     """
     Interactive CLI selection of a WASAPI loopback device.
@@ -64,8 +65,12 @@ def select_loopback_device(
         ch = int(info["maxInputChannels"])
         print(f"  [{i}]  {info['name']:<50}  dev#{idx}  {rate} Hz  {ch} ch")
 
-    sel = input(f"\nVyberte zařízení [0–{len(loopbacks) - 1}] (Enter = 0): ").strip()
-    choice = int(sel) if sel.isdigit() and int(sel) < len(loopbacks) else 0
+    if auto_select is not None:
+        choice = auto_select if 0 <= auto_select < len(loopbacks) else 0
+        print(f"\nAuto-select zařízení [{choice}]")
+    else:
+        sel = input(f"\nVyberte zařízení [0–{len(loopbacks) - 1}] (Enter = 0): ").strip()
+        choice = int(sel) if sel.isdigit() and int(sel) < len(loopbacks) else 0
 
     dev_idx, dev_info = loopbacks[choice]
     dev_rate = int(dev_info["defaultSampleRate"])
