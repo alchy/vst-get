@@ -255,10 +255,18 @@ def process_sample(
 
     # ------------------------------------------------------------------
     # Step 3: peak detection (from onset onward)
+    #
+    # Window size must match fadeout_min_window_ms so that peak_rms and
+    # the fade-out window powers are computed on the same time scale.
+    # Using 1 ms here (peak_window_ms) while fade-out uses 100 ms windows
+    # causes an apples-to-oranges comparison: a 1 ms window at a bass
+    # crest gives peak_rms ≈ A (instantaneous amplitude), whereas a 100 ms
+    # fade-out window gives power ≈ A²/2 (true RMS²).  The mismatch makes
+    # the threshold 2× too tight → note cut too short.
     # ------------------------------------------------------------------
     peak_frame_rel, peak_rms = find_peak(
         mono[start_frame:], fs,
-        window_ms=peak_window_ms,
+        window_ms=fadeout_min_window_ms,
     )
     peak_frame_abs = start_frame + peak_frame_rel
     log.info("  Peak (abs)  : frame=%d  t=%.1f ms", peak_frame_abs, peak_frame_abs / fs * 1000.0)
