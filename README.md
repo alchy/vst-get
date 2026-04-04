@@ -72,38 +72,42 @@ Pro každou notu a velocity vrstvu probíhá následující pipeline:
 
 ### 1. Mono pracovní kopie a normalizace
 
-Ze stereo záznamu se vytvoří mono kopie součtem L + R kanálů. Ta se normalizuje tak, aby peak dosáhl **–6 dBFS**. Tato kopie slouží výhradně pro analýzu (nikdy se neukládá).
+Ze stereo záznamu se vytvoří mono kopie součtem L + R kanálů. Ta se normalizuje tak, aby peak dosáhl **–6 dBFS**, s limitem gainu `--max-gain-db` (výchozí 40 dB).
+
+Limit gainu chrání tichá velocity (vrstva 0) před přílišným zesílením šumové podlahy: pokud by ideální gain překročil 40 dB, normalizace se zastaví na tomto limitu a výsledný peak bude nižší než –6 dBFS. Mono kopie slouží výhradně pro analýzu a nikdy se neukládá.
 
 ### 2. Detekce začátku (onset)
 
-Na normalizované mono kopii se hledá začátek signálu pomocí RMS analýzy v oknech po 1 ms. Výchozí práh je **–42 dB** relativně k peaku. Výsledný `start_frame` se aplikuje na originální stereo záznam.
+Na normalizované mono kopii se hledá začátek signálu pomocí RMS analýzy v oknech po 1 ms. Výchozí práh je **–42 dB** relativně k peaku záznamu. Výsledný `start_frame` se aplikuje na originální stereo záznam.
 
 ### 3. Detekce peaku
 
-Od `start_frame` se hledá okno s maximálním RMS (1 ms okna). Výsledkem je `peak_frame` a `peak_rms` — referenční hodnoty pro detekci fade-outu.
+Od `start_frame` se hledá okno s maximálním RMS (1 ms okna, včetně posledního neúplného). Výsledkem je `peak_frame` a `peak_rms` — referenční hodnoty pro detekci fade-outu.
 
 ### 4. Detekce fade-outu (binary subdivision průměrného výkonu)
 
 Od `peak_frame` do konce záznamu se iterativně halvingem hledá cut-out bod:
 
-1. Rozděl úsek na **`--fadeout-coarse-chunks`** oken (výchozí 16) — velikost okna se přizpůsobuje délce záznamu od peaku: `initial_hop = len(segment) / 16`
-2. Pro každé okno spočítej průměrný výkon `P = E / n_vzorků` (= RMS²) — neúplné okno na konci záznamu se vždy zahrne a počítá se přes skutečný počet vzorků
-3. Z oken splňujících podmínku `P ≤ peak_rms² × fadeout_ratio` vyber **nejdřívější** (první přechod pod práh, ne nejtiší bod)
-4. Zúži hledání na toto okno, halvuj → **50 % → 25 % → … → 1 vzorek**
+1. Rozděl úsek na **`--fadeout-coarse-chunks`** oken (výchozí 16) — počáteční okno = `len(segment) / 16`, přizpůsobuje se délce záznamu
+2. Pro každé okno spočítej průměrný výkon `P = E / n_vzorků` (= RMS²) — neúplné okno na konci se vždy zahrne a počítá přes skutečný počet vzorků
+3. Z oken splňujících podmínku `P ≤ peak_rms² × fadeout_ratio` vyber **nejdřívější** (první přechod pod práh)
+4. Zúži hledání na toto okno a halvuj — subdivision se zastaví nejdříve na **`--fadeout-min-window-ms`** (výchozí 100 ms), aby okna nepoklesla pod délku periody basových frekvencí (A0 = 36 ms)
 5. Start posledního okna = `end_frame`
 
-**Fallback:** Pokud žádné okno nesplní podmínku, použije se okno s nejmenším průměrným výkonem (signál odezněl, ale nepřekročil práh). Zaznamenáno v logu jako `(fallback: min-power)`.
+**Fallback:** Pokud žádné okno nesplní podmínku ratio (signál odezněl, ale nepřekročil práh), použije se okno s nejmenším průměrným výkonem. Zaznamenáno v logu jako `(fallback: min-power)`.
 
-### 5. Zero-start ochrana (prevence lupnutí)
+### 5. Zero-start a zero-end ochrana (prevence lupnutí)
 
-Střih na nenulové hodnotě způsobuje lupnutí při přehrávání. Po ořezu stereo originálu se proto:
+Střih na nenulové hodnotě způsobuje lupnutí při přehrávání samplu. Po ořezu stereo originálu se zkontrolují obě hrany — začátek i konec:
 
-1. Zkontroluje amplituda prvního vzorku `A = max(|L|, |R|)`
-2. Pokud `A < --zero-threshold` (výchozí 0.001 ≈ –60 dBFS) → vzorek začíná na nule, nic se nedělá
-3. Jinak se aplikuje **cosine fade-in** délky `max(1, round(max_fade_in × A))` vzorků
-   - Při plné amplitudě (A≈1) se použije plných `--max-fade-in` vzorků; při malé amplitudě se délka zkrátí úměrně
+1. Změř amplitudu hrany `A = max(|L|, |R|)`
+2. Pokud `A < --zero-threshold` (výchozí 0.001 ≈ –60 dBFS) → hrana je na nule, nic se nedělá
+3. Jinak se aplikuje **cosine fade** délky `max(1, round(max_fade_samples × A))` vzorků
+   - Začátek: fade-in `(1 − cos) / 2`, roste od 0 do 1
+   - Konec: fade-out `(1 + cos) / 2`, klesá od 1 do 0
+   - Délka škáluje s amplitudou — při A ≈ 1 se použije plný `--max-fade-samples`; při malé amplitudě se zkrátí
 
-Poznámka: dopředné hledání zero crossing se záměrně neprovádí — posunutí startu vpřed by mohlo oříznout začátek transientu, což je auditivně výraznější vada než krátký fade-in.
+Dopředné hledání zero crossing se záměrně neprovádí — posunutí startu vpřed by mohlo oříznout attack transient.
 
 ### Konzolový výstup
 
@@ -112,15 +116,18 @@ Pro každý vzorek se loguje průběh celého pipeline:
 ```
 [  42/704]  nota= 60  vrstva=3  vel= 64
   Normalizace : gain=+14.3 dB  (originální peak=-20.3 dBFS → cíl -6.0 dBFS)
-  Onset       : start_frame=28  t=29.2 ms  (práh=-42 dB)
+  Onset       : start_frame=28  t=29.2 ms  (práh=-42 dB rel. k peaku)
   Peak        : frame=312  t=325.0 ms  RMS=-6.0 dBFS
   Peak (abs)  : frame=340  t=354.2 ms
-  Fade-out    : ratio=0.10  E_threshold=...
-    kolo 1  [100 ms]  31 oken  min-energie okno č.18  E=-41.2 dB
-    kolo 2  [ 50 ms]   2 oken  min-energie okno č. 2  E=-43.8 dB
-    ...
-    → end_frame=3187  t=3320.8 ms
-  Zero-start  : cosine fade-in 17 vzorků  (A=0.57, max_fade_in=30)
+  Fade-out    : ratio=0.10  P_threshold=...  počáteční okno=1875.0 ms  min okno=100 ms
+    kolo 1  [1875.00 ms / 90000 vzorků]  16 oken  nejdřívější okno pod prahem č.13  P=-28.4 dB
+    kolo 2  [ 937.50 ms / 45000 vzorků]   2 oken  nejdřívější okno pod prahem č. 1  P=-29.1 dB
+    kolo 3  [ 468.75 ms / 22500 vzorků]   2 oken  nejdřívější okno pod prahem č. 2  P=-30.0 dB
+    kolo 4  [ 234.38 ms / 11250 vzorků]   2 oken  nejdřívější okno pod prahem č. 1  P=-31.2 dB
+    kolo 5  [ 117.19 ms /  5625 vzorků]   2 oken  nejdřívější okno pod prahem č. 2  P=-32.0 dB
+    → end_frame=158320  t=3298.3 ms
+  Zero-start  : cosine fade-in 17 vzorků  (A=0.57, max=30)
+  Zero-end    : cosine fade-out 12 vzorků  (A=0.40, max=30)
   Délka       : 3291.6 ms
   Uloženo     : m060-vel3-f48.wav  (3291.6 ms)
 ```
@@ -136,9 +143,11 @@ Pro každý vzorek se loguje průběh celého pipeline:
 | `--midi-channel` | `0` | MIDI kanál 0–15 |
 | `--threshold-db` | `-42` | Onset práh (dB rel. k normalizovanému peaku mono kopie) |
 | `--fadeout-ratio` | `0.1` | Fade-out: `P ≤ peak_rms² × ratio` |
-| `--fadeout-coarse-chunks` | `16` | Počet počátečních oken binary subdivision (přizpůsobuje se délce záznamu) |
-| `--max-fade-in` | `30` | Max. délka cosine fade-in na začátku (vzorky, škáluje s amplitudou) |
-| `--zero-threshold` | `0.001` | Amplituda pod kterou je start považován za nulu (≈ –60 dBFS) |
+| `--fadeout-coarse-chunks` | `16` | Počet počátečních oken binary subdivision |
+| `--fadeout-min-window-ms` | `100` | Min. velikost okna subdivision v ms (kryje basové frekvence) |
+| `--max-gain-db` | `40` | Max. gain normalizace v dB (limit pro tichá velocity) |
+| `--max-fade-samples` | `30` | Max. délka cosine fade na začátku i konci (vzorky, škáluje s amplitudou) |
+| `--zero-threshold` | `0.001` | Amplituda pod kterou je hrana považována za nulu (≈ –60 dBFS) |
 
 ## Časový odhad
 
@@ -149,9 +158,9 @@ Pro každý vzorek se loguje průběh celého pipeline:
 
 | Modul | Obsah |
 |-------|-------|
-| `audio_trim.py` | `SilenceTrimmer` — standalone reusable silence trimmer |
 | `peak_detector.py` | `find_onset()`, `find_peak()`, `find_fadeout()` — standalone detekce |
 | `sample_processor.py` | Celý processing pipeline pro jeden vzorek |
+| `audio_trim.py` | `SilenceTrimmer` — standalone reusable silence trimmer |
 | `wasapi_recorder.py` | `Recorder`, `list_loopback_devices`, `select_loopback_device` |
 | `midi_utils.py` | `open_midi_port` |
 | `wav_io.py` | `save_wav` |
