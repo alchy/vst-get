@@ -258,6 +258,33 @@ def process_sample(
         return None, _empty
 
     # ------------------------------------------------------------------
+    # Step 3b: sub-window onset refinement
+    #
+    # find_onset() returns the START of the first window above threshold,
+    # not the first non-silent sample within that window.  If the signal
+    # begins mid-window (e.g. at sample 240 of a 480-sample window), the
+    # first half of the window is pure silence — which shows up as a
+    # visible "silent block" in the saved WAV.
+    #
+    # Solution: scan forward sample-by-sample from start_frame up to one
+    # onset-window length to find the first sample whose absolute
+    # amplitude exceeds zero_threshold.  Using zero_threshold (default
+    # 0.001 ≈ −60 dBFS) as a per-sample criterion is safe because noise
+    # floor on a modern audio interface is well below that value.
+    # ------------------------------------------------------------------
+    onset_window_samples = max(1, int(onset_window_ms / 1000.0 * fs))
+    scan_end = min(start_frame + onset_window_samples, len(mono))
+    for i in range(start_frame, scan_end):
+        if abs(mono[i]) >= zero_threshold:
+            if i > start_frame:
+                log.info(
+                    "  Onset refine : start_frame %d → %d  (+%.1f ms ticha odstraněno)",
+                    start_frame, i, (i - start_frame) / fs * 1000.0,
+                )
+            start_frame = i
+            break
+
+    # ------------------------------------------------------------------
     # Step 4: peak detection (from onset onward)
     # ------------------------------------------------------------------
     peak_frame, _peak_rms = find_peak(
