@@ -99,6 +99,10 @@ def main() -> int:
         "--onset-window-ms", type=float, default=10.0,
         help="RMS okno pro detekci onsetu v ms (výchozí 10 ms)",
     )
+    parser.add_argument(
+        "--peak-window-ms", type=float, default=10.0,
+        help="RMS okno pro detekci peaku v ms (výchozí 10 ms)",
+    )
 
     # --- Fade-out detection ---
     parser.add_argument(
@@ -165,6 +169,7 @@ def main() -> int:
                 preroll_ms=args.preroll_ms,
                 onset_snr_db=args.onset_snr_db,
                 onset_window_ms=args.onset_window_ms,
+                peak_window_ms=args.peak_window_ms,
                 fadeout_snr_db=args.fadeout_snr_db,
                 fadeout_coarse_chunks=args.fadeout_coarse_chunks,
                 fadeout_min_window_ms=args.fadeout_min_window_ms,

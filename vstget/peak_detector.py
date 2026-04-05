@@ -250,7 +250,7 @@ def find_fadeout(
     snr_db: float = 6.0,
     coarse_chunks: int = 16,
     min_window_ms: float = 100.0,
-) -> int:
+) -> tuple[int, bool]:
     """
     Locate the fade-out cut point using binary subdivision.
 
@@ -338,8 +338,7 @@ def find_fadeout(
             # explicit tail fade instead.
             best_win = n_win - 1
             best_db = 20.0 * np.log10(float(rms_curve[best_win]) + 1e-10)
-            if round_num == 1:
-                fallback_used = True
+            fallback_used = True
             log.info(
                 "    kolo %d  [%6.2f ms / %d vzorků]  %2d oken  "
                 "práh nesplněn → konec záznamu (okno č.%2d  %.1f dBFS)  %s",

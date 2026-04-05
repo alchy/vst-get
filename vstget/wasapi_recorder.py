@@ -114,34 +114,45 @@ class Recorder:
         self._frames: list[bytes] = []
         self._thread: threading.Thread | None = None
         self._stream_ready = threading.Event()
+        self._thread_exc: BaseException | None = None
 
     def _record(self, duration: float) -> None:
         chunk = 1024
         total_frames = int(self._sample_rate * duration)
 
-        stream = self._p.open(
-            format=pyaudio.paInt16,
-            channels=self._channels,
-            rate=self._sample_rate,
-            input=True,
-            input_device_index=self._device_index,
-            frames_per_buffer=chunk,
-        )
+        try:
+            stream = self._p.open(
+                format=pyaudio.paInt16,
+                channels=self._channels,
+                rate=self._sample_rate,
+                input=True,
+                input_device_index=self._device_index,
+                frames_per_buffer=chunk,
+            )
+        except Exception as exc:
+            self._thread_exc = exc
+            self._stream_ready.set()   # unblock start() so it can raise
+            return
+
         self._stream_ready.set()
 
-        recorded = 0
-        while recorded < total_frames:
-            to_read = min(chunk, total_frames - recorded)
-            data = stream.read(to_read, exception_on_overflow=False)
-            self._frames.append(data)
-            recorded += to_read
-
-        stream.stop_stream()
-        stream.close()
+        try:
+            recorded = 0
+            while recorded < total_frames:
+                to_read = min(chunk, total_frames - recorded)
+                data = stream.read(to_read, exception_on_overflow=False)
+                self._frames.append(data)
+                recorded += to_read
+            stream.stop_stream()
+        except Exception as exc:
+            self._thread_exc = exc
+        finally:
+            stream.close()
 
     def start(self, duration: float) -> None:
         """Start recording asynchronously; returns only after the stream is open."""
         self._frames = []
+        self._thread_exc = None
         self._stream_ready.clear()
         self._thread = threading.Thread(
             target=self._record, args=(duration,), daemon=True
@@ -149,6 +160,10 @@ class Recorder:
         self._thread.start()
         if not self._stream_ready.wait(timeout=10):
             raise RuntimeError("WASAPI loopback stream did not open within 10 s")
+        if self._thread_exc is not None:
+            raise RuntimeError(
+                f"WASAPI stream failed to open: {self._thread_exc}"
+            ) from self._thread_exc
 
     def get(self, join_timeout: float = 300.0) -> np.ndarray:
         """
@@ -159,6 +174,10 @@ class Recorder:
         """
         if self._thread:
             self._thread.join(timeout=join_timeout)
+        if self._thread_exc is not None:
+            raise RuntimeError(
+                f"Recording failed: {self._thread_exc}"
+            ) from self._thread_exc
         raw = b"".join(self._frames)
         data = np.frombuffer(raw, dtype=np.int16)
         if self._channels > 1:

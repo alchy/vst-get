@@ -203,7 +203,7 @@ def process_sample(
         when the binary subdivision fallback is triggered.
     max_fade_samples : int
         Fixed cosine fade length in samples for zero-edge protection
-        at start and end (default 200 ≈ 4 ms at 48 kHz).
+        at start and end (default 96 ≈ 2 ms at 48 kHz).
     zero_threshold : float
         Amplitude below which a sample edge is considered "at zero"
         (default 0.001 ≈ –60 dBFS).
