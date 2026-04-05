@@ -58,6 +58,10 @@ def main() -> int:
         help="Přeskočit potvrzení Enterem — použij pokud je VST již spuštěno",
     )
     parser.add_argument(
+        "--verbose", action="store_true",
+        help="Podrobný výpis pipeline pro každý vzorek (výchozí: kompaktní řádek)",
+    )
+    parser.add_argument(
         "--audio-device", type=int, default=None,
         help="Index WASAPI loopback zařízení (přeskočí interaktivní výběr); výchozí = interaktivní",
     )
@@ -157,6 +161,7 @@ def main() -> int:
                 note_start=args.note_start,
                 note_end=args.note_end,
                 midi_channel=args.midi_channel,
+                verbose=args.verbose,
                 preroll_ms=args.preroll_ms,
                 onset_snr_db=args.onset_snr_db,
                 onset_window_ms=args.onset_window_ms,

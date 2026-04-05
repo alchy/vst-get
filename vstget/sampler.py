@@ -26,6 +26,7 @@ Example
 """
 
 import logging
+import logging.config
 import time
 from pathlib import Path
 
@@ -121,6 +122,7 @@ def sample_all(
     note_end: int = PIANO_HIGH,
     midi_channel: int = 0,
     velocity_layers: list[int] | None = None,
+    verbose: bool = True,
     # process_sample kwargs forwarded verbatim
     preroll_ms: float = 120.0,
     onset_snr_db: float = 6.0,
@@ -130,7 +132,7 @@ def sample_all(
     fadeout_coarse_chunks: int = 16,
     fadeout_min_window_ms: float = 100.0,
     tail_fade_ms: float = 500.0,
-    max_fade_samples: int = 200,
+    max_fade_samples: int = 96,
     zero_threshold: float = 0.001,
 ) -> None:
     """
@@ -158,6 +160,10 @@ def sample_all(
     midi_channel : int
     velocity_layers : list[int] or None
         MIDI velocity values per layer.  Defaults to ``VELOCITY_LAYERS``.
+    verbose : bool
+        When True (default), log the full processing pipeline for every
+        sample.  When False, suppress detailed vstget logger output and
+        print a single compact line per sample instead.
     preroll_ms : float
         Duration of guaranteed-silent preroll used for noise floor
         estimation (default 120 ms, within the 150 ms PREROLL).
@@ -182,32 +188,38 @@ def sample_all(
     if velocity_layers is None:
         velocity_layers = VELOCITY_LAYERS
 
+    if not verbose:
+        logging.getLogger("vstget").setLevel(logging.WARNING)
+
     freq_tag = f"f{sample_rate // 1000}"
     total = (note_end - note_start + 1) * len(velocity_layers)
     n = 0
     saved = 0
     skipped = 0
 
-    log.info(
-        "Rozsah not: %d–%d  ×  %d velocity vrstev  =  %d vzorků",
-        note_start, note_end, len(velocity_layers), total,
+    print(
+        f"Rozsah not: {note_start}–{note_end}  ×  {len(velocity_layers)} velocity vrstev"
+        f"  =  {total} vzorků",
+        flush=True,
     )
-    log.info("Odhadovaný čas: %.0f min", total * TOTAL_DURATION / 60)
-    log.info("Velocity vrstvy: %s", velocity_layers)
+    print(f"Odhadovaný čas: {total * TOTAL_DURATION / 60:.0f} min", flush=True)
 
     for note in range(note_start, note_end + 1):
         for vel_layer, velocity in enumerate(velocity_layers):
             n += 1
-            print(
-                f"[{n:>4}/{total}]  nota={note:>3}  vrstva={vel_layer}  vel={velocity:>3}",
-                flush=True,
-            )
+            filename = f"m{note:03d}-vel{vel_layer}-{freq_tag}.wav"
+
+            if verbose:
+                print(
+                    f"[{n:>4}/{total}]  nota={note:>3}  vrstva={vel_layer}  vel={velocity:>3}",
+                    flush=True,
+                )
 
             raw = record_one(
                 recorder, midi_out, note, velocity, midi_channel, sample_rate,
             )
 
-            processed = process_sample(
+            processed, stats = process_sample(
                 raw, sample_rate,
                 preroll_ms=preroll_ms,
                 onset_snr_db=onset_snr_db,
@@ -222,15 +234,29 @@ def sample_all(
             )
 
             if processed is None:
-                log.info("  → ticho, přeskočeno")
+                if verbose:
+                    log.info("  → ticho, přeskočeno")
+                else:
+                    print(
+                        f"[{n:>4}/{total}]  file={filename}  SKIP (ticho)",
+                        flush=True,
+                    )
                 skipped += 1
                 continue
 
-            filename = f"m{note:03d}-vel{vel_layer}-{freq_tag}.wav"
             save_wav(processed, output_dir / filename, sample_rate, channels)
             dur_ms = len(processed) / sample_rate * 1000.0
-            log.info("  Uloženo     : %s  (%.1f ms)", filename, dur_ms)
+
+            if verbose:
+                log.info("  Uloženo     : %s  (%.1f ms)", filename, dur_ms)
+            else:
+                peak_db = stats.get("peak_rms_db", 0.0)
+                print(
+                    f"[{n:>4}/{total}]  file={filename}"
+                    f"  peak={peak_db:+.1f} dBFS  t={dur_ms:.0f} ms",
+                    flush=True,
+                )
             saved += 1
 
     print()
-    log.info("Hotovo. Uloženo: %d  Přeskočeno: %d", saved, skipped)
+    print(f"Hotovo. Uloženo: {saved}  Přeskočeno: {skipped}", flush=True)

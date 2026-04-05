@@ -164,7 +164,7 @@ def process_sample(
     tail_fade_ms: float = 500.0,
     max_fade_samples: int = 96,
     zero_threshold: float = 0.001,
-) -> np.ndarray | None:
+) -> tuple[np.ndarray | None, dict]:
     """
     Process a single raw recorded sample through the full pipeline.
 
@@ -210,11 +210,14 @@ def process_sample(
 
     Returns
     -------
-    np.ndarray or None
-        Trimmed stereo float32 array, or None if the recording is silent.
+    (np.ndarray or None, dict)
+        Trimmed stereo float32 array (or None if the recording is silent)
+        and a stats dict with key ``peak_rms_db`` (float, 0.0 when silent).
     """
+    _empty: dict = {"peak_rms_db": 0.0}
+
     if len(data) == 0:
-        return None
+        return None, _empty
 
     # ------------------------------------------------------------------
     # Step 1: mono working copy — average of all channels, no normalisation
@@ -223,7 +226,7 @@ def process_sample(
 
     if np.max(np.abs(mono)) == 0.0:
         log.info("  → záznam je tichý, přeskočeno")
-        return None
+        return None, _empty
 
     # ------------------------------------------------------------------
     # Step 2: noise floor from preroll
@@ -252,7 +255,7 @@ def process_sample(
 
     if start_frame >= len(mono):
         log.info("  → onset nenalezen (celý záznam pod prahem), přeskočeno")
-        return None
+        return None, _empty
 
     # ------------------------------------------------------------------
     # Step 4: peak detection (from onset onward)
@@ -275,9 +278,12 @@ def process_sample(
         min_window_ms=fadeout_min_window_ms,
     )
 
+    peak_rms_db = 20.0 * np.log10(float(_peak_rms) + 1e-10)
+    stats: dict = {"peak_rms_db": peak_rms_db}
+
     if end_frame <= start_frame:
         log.info("  → end_frame ≤ start_frame, přeskočeno")
-        return None
+        return None, stats
 
     # ------------------------------------------------------------------
     # Step 6: trim original stereo recording
@@ -313,4 +319,5 @@ def process_sample(
     dur_ms = len(result) / fs * 1000.0
     log.info("  Délka       : %.1f ms", dur_ms)
 
-    return result if len(result) > 0 else None
+    trimmed = result if len(result) > 0 else None
+    return trimmed, stats
