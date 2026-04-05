@@ -162,7 +162,7 @@ def process_sample(
     fadeout_coarse_chunks: int = 16,
     fadeout_min_window_ms: float = 100.0,
     tail_fade_ms: float = 500.0,
-    max_fade_samples: int = 200,
+    max_fade_samples: int = 96,
     zero_threshold: float = 0.001,
 ) -> np.ndarray | None:
     """

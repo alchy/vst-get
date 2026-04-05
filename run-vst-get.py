@@ -118,8 +118,8 @@ def main() -> int:
 
     # --- Zero-edge ochrana (start i konec) ---
     parser.add_argument(
-        "--max-fade-samples", type=int, default=200,
-        help="Délka cosine fade na začátku a konci samplu v vzorcích (výchozí 200 ≈ 4 ms při 48 kHz)",
+        "--max-fade-samples", type=int, default=96,
+        help="Délka cosine fade na začátku a konci samplu v vzorcích (výchozí 96 ≈ 2 ms při 48 kHz)",
     )
     parser.add_argument(
         "--zero-threshold", type=float, default=0.001,
