@@ -133,27 +133,76 @@ Pro každý vzorek se loguje průběh celého pipeline:
 
 ## Parametry příkazové řádky
 
+### Obecné
+
 | Parametr | Výchozí | Popis |
 |----------|---------|-------|
 | `--output-dir` | *(povinné)* | Výstupní adresář |
-| `--note-start` | `21` | První MIDI nota (A0) |
-| `--note-end` | `108` | Poslední MIDI nota (C8) |
+| `--do-not-prompt` | *(příznak)* | Přeskočit potvrzení Enterem před zahájením |
+| `--verbose` | *(příznak)* | Podrobný výpis celé pipeline (výchozí: jeden kompaktní řádek na vzorek) |
+| `--audio-device` | *(interaktivní)* | Index WASAPI loopback zařízení — přeskočí interaktivní výběr |
+
+### MIDI
+
+| Parametr | Výchozí | Popis |
+|----------|---------|-------|
 | `--midi-port` | `loopMIDI port` | Název MIDI výstupního portu |
 | `--midi-channel` | `0` | MIDI kanál 0–15 |
+| `--note-start` | `21` | První MIDI nota (A0) |
+| `--note-end` | `108` | Poslední MIDI nota (C8) |
+| `--prevent-damper-sound` | *(příznak)* | Note-off odložen až po skončení záznamu — damper nezazní do samplu (+5 s/nota) |
+
+### Detekce onsetu
+
+| Parametr | Výchozí | Popis |
+|----------|---------|-------|
 | `--preroll-ms` | `120` | Délka prerollu pro odhad šumové podlahy (ms) |
-| `--onset-snr-db` | `6` | Onset: SNR nad šumem v dB (nižší = citlivější; pro vel0 basy zkus 4–5) |
+| `--onset-snr-db` | `6` | SNR nad šumem pro detekci onsetu v dB (nižší = citlivější; pro vel0 basy zkus 4–5) |
 | `--onset-window-ms` | `10` | RMS okno pro detekci onsetu (ms) |
+| `--zero-threshold` | `0.001` | Amplituda pod kterou je vzorek považován za nulový (≈ –60 dBFS); slouží i pro sub-window refinement onsetu |
+
+### Detekce fade-outu
+
+| Parametr | Výchozí | Popis |
+|----------|---------|-------|
+| `--peak-window-ms` | `10` | RMS okno pro detekci peaku (ms) |
 | `--fadeout-snr-db` | `6` | Fade-out: RMS pod touto hodnotou nad šumem = ticho (dB) |
 | `--fadeout-coarse-chunks` | `16` | Počet počátečních oken binary subdivision |
 | `--fadeout-min-window-ms` | `100` | Min. velikost okna subdivision v ms (kryje basové frekvence) |
 | `--tail-fade-ms` | `500` | Fade-out na konci záznamu pokud nota neodezněla (ms) |
-| `--max-fade-samples` | `200` | Délka cosine fade na hranách samplu (vzorky, ≈ 4 ms při 48 kHz) |
-| `--zero-threshold` | `0.001` | Amplituda pod kterou je hrana považována za nulu (≈ –60 dBFS) |
+
+### Ochrana hran (click prevence)
+
+| Parametr | Výchozí | Popis |
+|----------|---------|-------|
+| `--max-fade-samples` | `96` | Délka cosine fade na hranách samplu (vzorky, ≈ 2 ms při 48 kHz) |
+
+## Prevence damper zvuku (`--prevent-damper-sound`)
+
+U akustických nástrojů (piano, upright bass) způsobuje note-off dopad tlumítka (damperu) na strunu — krátký mechanický zvuk, který může být slyšitelný na konci samplu, zejména v tichých velocity vrstvách.
+
+Bez příznaku:
+
+```
+PREROLL (0.15 s, nahrává se) → note-on → NOTE_HOLD (29 s) → note-off ← damper
+→ NOTE_RELEASE (1 s, nahrává se) → konec záznamu
+```
+
+S `--prevent-damper-sound`:
+
+```
+PREROLL (0.15 s, nahrává se) → note-on → TOTAL_DURATION (30 s, nahrává se, nota drží)
+→ konec záznamu → 2.5 s pauza → note-off ← damper (nenáhráváno) → 2.5 s pauza → další nota
+```
+
+Obsah a délka záznamu jsou stejné. Celková doba samplování se zvyšuje o 5 s na notu.
 
 ## Časový odhad
 
-- Každá nota: 29 s note-on + 1 s release = 30 s
-- Plný piano rozsah (88 not × 8 vrstev): ~6 hodin
+| Režim | Čas na notu | 88 not × 8 vrstev |
+|-------|-------------|-------------------|
+| Výchozí | 30 s | ~6 hodin |
+| `--prevent-damper-sound` | 35 s (+5 s pauza) | ~7 hodin |
 
 ## Struktura projektu
 
