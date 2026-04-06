@@ -49,6 +49,14 @@ NOTE_RELEASE = 1.0    # seconds after note-off (decay / silence tail)
 TOTAL_DURATION = NOTE_HOLD + NOTE_RELEASE
 PREROLL = 0.15        # seconds captured before note-on (protects attack)
 
+# --prevent-damper-sound timing
+# After recording ends the note is still held; note-off (damper) is sent
+# only after DAMPER_PRE_DELAY seconds — outside the recorded window.
+# After note-off a further DAMPER_POST_DELAY pause lets the instrument
+# settle before the next note begins.
+DAMPER_PRE_DELAY = 2.5    # s between end of recording and note-off
+DAMPER_POST_DELAY = 2.5   # s between note-off and start of next note
+
 # 8 velocity layers evenly spaced across 1–127
 # Formula: round(127/8 * (i+1)) for i in 0..7
 VELOCITY_LAYERS: list[int] = [round(127 / 8 * (i + 1)) for i in range(8)]
@@ -67,6 +75,7 @@ def record_one(
     velocity: int,
     midi_channel: int,
     sample_rate: int,
+    prevent_damper: bool = False,
 ) -> np.ndarray:
     """
     Record a single note+velocity combination and return raw audio.
@@ -87,6 +96,12 @@ def record_one(
     midi_channel : int
         MIDI channel (0–15).
     sample_rate : int
+    prevent_damper : bool
+        When True the note is held for the entire recording window so the
+        damper never falls during capture.  After recording finishes:
+        wait DAMPER_PRE_DELAY s, send note-off (damper falls, not recorded),
+        wait DAMPER_POST_DELAY s before returning.  Total wall-clock time
+        per note increases by DAMPER_PRE_DELAY + DAMPER_POST_DELAY seconds.
 
     Returns
     -------
@@ -97,11 +112,21 @@ def record_one(
     time.sleep(PREROLL)
 
     midi_out.send(mido.Message("note_on", note=note, velocity=velocity, channel=midi_channel))
-    time.sleep(NOTE_HOLD)
-    midi_out.send(mido.Message("note_off", note=note, velocity=0, channel=midi_channel))
-    time.sleep(NOTE_RELEASE)
 
-    data = recorder.get()
+    if prevent_damper:
+        # Hold the note for the full recording window — damper never fires
+        # during capture.
+        time.sleep(TOTAL_DURATION)
+        data = recorder.get()
+        # Send note-off (damper) only after recording is done.
+        time.sleep(DAMPER_PRE_DELAY)
+        midi_out.send(mido.Message("note_off", note=note, velocity=0, channel=midi_channel))
+        time.sleep(DAMPER_POST_DELAY)
+    else:
+        time.sleep(NOTE_HOLD)
+        midi_out.send(mido.Message("note_off", note=note, velocity=0, channel=midi_channel))
+        time.sleep(NOTE_RELEASE)
+        data = recorder.get()
 
     # Remove DC offset
     if data.ndim == 1:
@@ -123,6 +148,7 @@ def sample_all(
     midi_channel: int = 0,
     velocity_layers: list[int] | None = None,
     verbose: bool = True,
+    prevent_damper: bool = False,
     # process_sample kwargs forwarded verbatim
     preroll_ms: float = 120.0,
     onset_snr_db: float = 6.0,
@@ -164,6 +190,10 @@ def sample_all(
         When True (default), log the full processing pipeline for every
         sample.  When False, suppress detailed vstget logger output and
         print a single compact line per sample instead.
+    prevent_damper : bool
+        When True, note-off is deferred until after recording ends so the
+        damper sound is never captured.  Adds DAMPER_PRE_DELAY +
+        DAMPER_POST_DELAY seconds of unrecorded pause per note.
     preroll_ms : float
         Duration of guaranteed-silent preroll used for noise floor
         estimation (default 120 ms, within the 150 ms PREROLL).
@@ -202,7 +232,14 @@ def sample_all(
         f"  =  {total} vzorků",
         flush=True,
     )
-    print(f"Odhadovaný čas: {total * TOTAL_DURATION / 60:.0f} min", flush=True)
+    extra = DAMPER_PRE_DELAY + DAMPER_POST_DELAY if prevent_damper else 0.0
+    print(f"Odhadovaný čas: {total * (TOTAL_DURATION + extra) / 60:.0f} min", flush=True)
+    if prevent_damper:
+        print(
+            f"--prevent-damper-sound: note-off odložen o {DAMPER_PRE_DELAY:.1f} s po záznamu,"
+            f" pauza {DAMPER_POST_DELAY:.1f} s před další notou",
+            flush=True,
+        )
 
     for note in range(note_start, note_end + 1):
         for vel_layer, velocity in enumerate(velocity_layers):
@@ -217,6 +254,7 @@ def sample_all(
 
             raw = record_one(
                 recorder, midi_out, note, velocity, midi_channel, sample_rate,
+                prevent_damper=prevent_damper,
             )
 
             processed, stats = process_sample(

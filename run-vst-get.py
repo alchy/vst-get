@@ -62,6 +62,13 @@ def main() -> int:
         help="Podrobný výpis pipeline pro každý vzorek (výchozí: kompaktní řádek)",
     )
     parser.add_argument(
+        "--prevent-damper-sound", action="store_true",
+        help=(
+            "Odloží note-off až po skončení záznamu — damper nezazní do samplu. "
+            f"Přidá {2.5 + 2.5:.0f} s nenahrávané pauzy na notu."
+        ),
+    )
+    parser.add_argument(
         "--audio-device", type=int, default=None,
         help="Index WASAPI loopback zařízení (přeskočí interaktivní výběr); výchozí = interaktivní",
     )
@@ -166,6 +173,7 @@ def main() -> int:
                 note_end=args.note_end,
                 midi_channel=args.midi_channel,
                 verbose=args.verbose,
+                prevent_damper=args.prevent_damper_sound,
                 preroll_ms=args.preroll_ms,
                 onset_snr_db=args.onset_snr_db,
                 onset_window_ms=args.onset_window_ms,
