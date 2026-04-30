@@ -4,16 +4,18 @@ vstget — VST Instrument Sampler
 ================================
 Samples all piano-range MIDI notes across 8 velocity layers.
 
-MIDI output : loopMIDI port  (Tobias Erichsen loopMIDI)
-Audio input : WASAPI loopback (pyaudiowpatch)
-Output      : stereo interleaved 16-bit PCM WAV
-Filename    : m<NNN>-vel<V>-f<SR>.wav
-              NNN = MIDI note 000-127
-              V   = velocity layer 0-7
-              SR  = sample rate kHz (48 or 44)
+Cross-platform:
+  macOS   : CoreAudio + BlackHole (virtual loopback) + IAC Driver (MIDI)
+  Windows : WASAPI loopback (pyaudiowpatch) + loopMIDI
+
+Output: stereo interleaved 16-bit PCM WAV
+Filename: m<NNN>-vel<V>-f<SR>.wav
+          NNN = MIDI note 000-127
+          V   = velocity layer 0-7
+          SR  = sample rate kHz (48 or 44)
 
 Usage:
-    python vst-get.py --output-dir samples_out [options]
+    python run-vst-get.py --output-dir samples_out [options]
 """
 
 import argparse
@@ -21,16 +23,14 @@ import logging
 import sys
 from pathlib import Path
 
-import pyaudiowpatch as pyaudio
-
 from vstget.midi_utils import open_midi_port
-from vstget.sampler import PIANO_HIGH, PIANO_LOW, sample_all
-from vstget.wasapi_recorder import Recorder, select_loopback_device
+from vstget.sampler import PIANO_HIGH, PIANO_LOW, VELOCITY_LAYERS, sample_all
+from vstget.recorder import create_audio_backend, select_device, Recorder
 
 # Force UTF-8 output on Windows consoles
-if sys.stdout.encoding.lower() != "utf-8":
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if sys.stderr.encoding.lower() != "utf-8":
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 logging.basicConfig(
@@ -39,12 +39,16 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-DEFAULT_MIDI_PORT = "loopMIDI port"
+# Default MIDI port: IAC Driver on macOS, loopMIDI on Windows
+if sys.platform == "darwin":
+    DEFAULT_MIDI_PORT = "IAC Driver"
+else:
+    DEFAULT_MIDI_PORT = "loopMIDI port"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="vstget – sampluje VST nástroj přes loopMIDI + WASAPI loopback",
+        description="vstget – sampluje VST nástroj přes loopback audio + virtuální MIDI",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -70,7 +74,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--audio-device", type=int, default=None,
-        help="Index WASAPI loopback zařízení (přeskočí interaktivní výběr); výchozí = interaktivní",
+        help="Index audio zařízení (přeskočí interaktivní výběr); výchozí = interaktivní",
     )
 
     # --- MIDI ---
@@ -91,6 +95,13 @@ def main() -> int:
     parser.add_argument(
         "--note-end", type=int, default=PIANO_HIGH,
         help="Poslední MIDI nota (C8)",
+    )
+    parser.add_argument(
+        "--velocity-layers", type=int, default=None,
+        help=(
+            "Počet velocity vrstev (1–127). Hodnoty rovnoměrně rozložené v rozsahu 1–127 "
+            "(N=32 → vel 4, 8, 12, ..., 127). Bez parametru = legacy režim s 8 vrstvami."
+        ),
     )
 
     # --- Šum a onset ---
@@ -143,12 +154,31 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    if args.velocity_layers is None:
+        velocity_layers = None
+        print(
+            f"Legacy režim: {len(VELOCITY_LAYERS)} velocity vrstev (0–{len(VELOCITY_LAYERS) - 1}), "
+            f"MIDI hodnoty {VELOCITY_LAYERS}, pojmenování mXXX-velX-fXX.wav",
+            flush=True,
+        )
+    else:
+        if not 1 <= args.velocity_layers <= 127:
+            parser.error("--velocity-layers musí být v rozsahu 1–127")
+        n = args.velocity_layers
+        velocity_layers = [round(127 / n * (i + 1)) for i in range(n)]
+        print(
+            f"Vlastní režim: {n} velocity vrstev (indexy 000–{n - 1:03d}), "
+            f"MIDI hodnoty {velocity_layers[0]}, {velocity_layers[1] if n > 1 else '...'}, …, {velocity_layers[-1]}; "
+            f"pojmenování mXXX-vVVV-fXX.wav (VVV = index vrstvy)",
+            flush=True,
+        )
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    p = pyaudio.PyAudio()
+    pa, backend = create_audio_backend()
     try:
-        dev_idx, dev_rate, dev_ch = select_loopback_device(p, auto_select=args.audio_device)
+        dev_idx, dev_rate, dev_ch = select_device(pa, backend, auto_select=args.audio_device)
         midi_out = open_midi_port(args.midi_port)
 
         print(f"\nVýstupní adresář: {output_dir.resolve()}")
@@ -160,7 +190,7 @@ def main() -> int:
                 "Stiskněte Enter pro zahájení...\n"
             )
 
-        recorder = Recorder(p, dev_idx, dev_rate, dev_ch)
+        recorder = Recorder(pa, dev_idx, dev_rate, dev_ch)
 
         try:
             sample_all(
@@ -172,6 +202,7 @@ def main() -> int:
                 note_start=args.note_start,
                 note_end=args.note_end,
                 midi_channel=args.midi_channel,
+                velocity_layers=velocity_layers,
                 verbose=args.verbose,
                 prevent_damper=args.prevent_damper_sound,
                 preroll_ms=args.preroll_ms,
@@ -190,7 +221,7 @@ def main() -> int:
         finally:
             midi_out.close()
     finally:
-        p.terminate()
+        pa.terminate()
 
     return 0
 

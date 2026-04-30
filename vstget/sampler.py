@@ -34,7 +34,7 @@ import mido
 import numpy as np
 
 from .sample_processor import process_sample
-from .wasapi_recorder import Recorder
+from .recorder import Recorder
 from .wav_io import save_wav
 
 # ---------------------------------------------------------------------------
@@ -215,6 +215,7 @@ def sample_all(
     zero_threshold : float
         Amplitude below which an edge is considered "at zero" (default 0.001).
     """
+    legacy_naming = velocity_layers is None
     if velocity_layers is None:
         velocity_layers = VELOCITY_LAYERS
 
@@ -244,7 +245,10 @@ def sample_all(
     for note in range(note_start, note_end + 1):
         for vel_layer, velocity in enumerate(velocity_layers):
             n += 1
-            filename = f"m{note:03d}-vel{vel_layer}-{freq_tag}.wav"
+            if legacy_naming:
+                filename = f"m{note:03d}-vel{vel_layer}-{freq_tag}.wav"
+            else:
+                filename = f"m{note:03d}-v{vel_layer:03d}-{freq_tag}.wav"
 
             if verbose:
                 print(

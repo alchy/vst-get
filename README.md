@@ -1,27 +1,90 @@
 # vstget — VST Instrument Sampler
 
-Automaticky sampluje standalone VST nástroj přes všechny noty v rozsahu piana (MIDI 21–108) a 8 velocity vrstev. MIDI komunikace probíhá přes loopMIDI, audio se zachytává přes WASAPI loopback.
+Automaticky sampluje VST nástroj přes všechny noty v rozsahu piana (MIDI 21–108) a 8 velocity vrstev.
+
+**Cross-platform:** funguje na macOS i Windows.
+
+| | macOS | Windows |
+|---|---|---|
+| Audio zachycení | CoreAudio + [BlackHole](https://existential.audio/blackhole/) | WASAPI loopback (pyaudiowpatch) |
+| MIDI routing | IAC Driver (vestavěný v macOS) | [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) |
 
 ## Požadavky
 
+### macOS
+
+- macOS 12+
+- Python 3.11+
+- [BlackHole 2ch](https://existential.audio/blackhole/) — virtuální audio loopback
+- IAC Driver — vestavěný v macOS, je potřeba aktivovat (viz níže)
+- VST nástroj v DAW nebo standalone — s audio výstupem na BlackHole 2ch
+
+### Windows
+
 - Windows 10/11
-- Python 3.13
+- Python 3.11+
 - [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) (Tobias Erichsen) — spuštěný s portem `loopMIDI Port`
 - VST nástroj v režimu **standalone** — routovaný na výstupní audio zařízení Windows
 - Audio zařízení s WASAPI loopback podporou (integrovaná karta nebo ZOOM UAC-2 apod.)
 
 ## Instalace
 
-### 1. Externí aplikace (mimo pip)
+### macOS
+
+#### 1. BlackHole (virtuální audio loopback)
+
+```bash
+brew install blackhole-2ch
+```
+
+Po instalaci se BlackHole 2ch objeví jako audio vstup i výstup v systému.
+
+#### 2. IAC Driver (virtuální MIDI)
+
+IAC Driver je součástí macOS, ale je potřeba ho aktivovat:
+
+1. Otevři **Audio MIDI Setup** (Spotlight → "Audio MIDI Setup")
+2. Menu **Window → Show MIDI Studio**
+3. Dvakrát klikni na **IAC Driver**
+4. Zaškrtni **Device is online**
+5. Ověř, že existuje alespoň jeden bus (např. "Bus 1")
+
+#### 3. Python závislosti
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Na macOS je potřeba mít nainstalovaný `portaudio`:
+
+```bash
+brew install portaudio
+```
+
+#### 4. Nastavení VST nástroje
+
+1. Spusť VST nástroj (standalone nebo v DAW, např. UVI Workstation)
+2. **Audio výstup** nastav na **BlackHole 2ch**
+3. **MIDI vstup** nastav na **IAC Driver Bus 1**
+
+**Tip:** Pokud chceš zároveň slyšet výstup, vytvoř v Audio MIDI Setup **Multi-Output Device** obsahující BlackHole 2ch + reproduktory/sluchátka.
+
+### Windows
+
+#### 1. Externí aplikace
 
 | Aplikace | Poznámka |
 |----------|----------|
 | [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) | Musí běžet se spuštěným portem `loopMIDI Port` |
 | VST nástroj (standalone) | Spustit před zahájením samplování |
 
-### 2. Python závislosti
+#### 2. Python závislosti
 
 ```bash
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -29,18 +92,44 @@ pip install -r requirements.txt
 
 ## Spuštění
 
+### macOS
+
+Legacy režim (8 velocity vrstev):
+
 ```bash
-python run-vst-get.py --output-dir samples_out
+.venv/bin/python run-vst-get.py --output-dir samples_out --midi-port "IAC Driver" --audio-device 0
+```
+
+Vlastní počet vrstev (např. 32 vzorků na notu — MIDI velocity 4, 8, 12, …, 127):
+
+```bash
+.venv/bin/python run-vst-get.py --output-dir samples_out --midi-port "IAC Driver" --audio-device 0 --velocity-layers 32
+```
+
+### Windows
+
+Legacy režim (8 velocity vrstev):
+
+```bash
+.venv\Scripts\python run-vst-get.py --output-dir samples_out
+```
+
+Vlastní počet vrstev (např. 32 vzorků na notu):
+
+```bash
+.venv\Scripts\python run-vst-get.py --output-dir samples_out --velocity-layers 32
 ```
 
 Program při startu:
-1. Vypíše dostupná WASAPI loopback zařízení — vyber to, na které VST vysílá
-2. Ověří dostupnost portu `loopMIDI Port`
-3. Čeká na potvrzení (Enter) — čas na spuštění VST
+1. Vypíše dostupná audio vstupní zařízení — na macOS hledej **BlackHole 2ch** (označeno ★), na Windows WASAPI loopback
+2. Ověří dostupnost MIDI portu (IAC Driver / loopMIDI)
+3. Čeká na potvrzení (Enter) — čas na spuštění VST; přeskoč pomocí `--do-not-prompt`
 
 ## Výstupní formát
 
-Soubory se ukládají jako **stereo interleaved 16-bit PCM WAV**:
+Soubory se ukládají jako **stereo interleaved 16-bit PCM WAV**. Pojmenování závisí na režimu:
+
+### Legacy režim (bez `--velocity-layers`)
 
 ```
 mNNN-velV-fSR.wav
@@ -51,7 +140,22 @@ mNNN-velV-fSR.wav
 
 Příklady: `m060-vel0-f44.wav`, `m060-vel7-f44.wav`, `m021-vel3-f48.wav`
 
+### Vlastní režim (s `--velocity-layers N`)
+
+```
+mNNN-vVVV-fSR.wav
+ │    │    └─ vzorkovací frekvence: f48 = 48 kHz, f44 = 44 kHz
+ │    └─────── index velocity vrstvy: 000 (nejtiší) – (N−1) (nejhlasitější), zero-padded na 3 cifry
+ └──────────── MIDI číslo noty: 000–127
+```
+
+Indexy jsou souvislé od 0 do N−1 — bez skoků a nezávisle na skutečné MIDI velocity, která se posílá do VST.
+
+Příklady (pro `--velocity-layers 32`, indexy 0–31): `m060-v000-f48.wav`, `m060-v015-f48.wav`, `m060-v031-f48.wav`
+
 ## Velocity vrstvy
+
+### Legacy režim (8 vrstev)
 
 8 vrstev rovnoměrně rozložených v rozsahu 1–127:
 
@@ -65,6 +169,19 @@ Příklady: `m060-vel0-f44.wav`, `m060-vel7-f44.wav`, `m021-vel3-f48.wav`
 | 5      | 95           |
 | 6      | 111          |
 | 7      | 127          |
+
+### Vlastní režim (`--velocity-layers N`)
+
+Po zadání `--velocity-layers N` (1–127) program vygeneruje N vrstev rovnoměrně rozložených v rozsahu 1–127 podle vzorce `round(127/N · (i+1))` pro `i = 0..N-1`. Poslední vrstva má vždy MIDI velocity 127.
+
+Příklady:
+
+| N | Inkrement | MIDI velocity |
+|---|-----------|--------------|
+| 16 | ≈ 8 | 8, 16, 24, 32, …, 119, 127 |
+| 32 | ≈ 4 | 4, 8, 12, 16, …, 123, 127 |
+| 64 | ≈ 2 | 2, 4, 6, 8, …, 125, 127 |
+| 127 | 1 | 1, 2, 3, …, 126, 127 |
 
 ## Zpracování každého samplu
 
@@ -140,16 +257,17 @@ Pro každý vzorek se loguje průběh celého pipeline:
 | `--output-dir` | *(povinné)* | Výstupní adresář |
 | `--do-not-prompt` | *(příznak)* | Přeskočit potvrzení Enterem před zahájením |
 | `--verbose` | *(příznak)* | Podrobný výpis celé pipeline (výchozí: jeden kompaktní řádek na vzorek) |
-| `--audio-device` | *(interaktivní)* | Index WASAPI loopback zařízení — přeskočí interaktivní výběr |
+| `--audio-device` | *(interaktivní)* | Index audio zařízení — přeskočí interaktivní výběr |
 
 ### MIDI
 
 | Parametr | Výchozí | Popis |
 |----------|---------|-------|
-| `--midi-port` | `loopMIDI port` | Název MIDI výstupního portu |
+| `--midi-port` | `IAC Driver` (macOS) / `loopMIDI port` (Win) | Název MIDI výstupního portu |
 | `--midi-channel` | `0` | MIDI kanál 0–15 |
 | `--note-start` | `21` | První MIDI nota (A0) |
 | `--note-end` | `108` | Poslední MIDI nota (C8) |
+| `--velocity-layers` | *(legacy 8)* | Počet velocity vrstev (1–127). Bez parametru = legacy režim s 8 vrstvami a pojmenováním `mNNN-velV-fSR.wav`; s parametrem se použije `mNNN-vVVV-fSR.wav` (VVV = index vrstvy 000…N−1, souvislý) |
 | `--prevent-damper-sound` | *(příznak)* | Note-off odložen až po skončení záznamu — damper nezazní do samplu (+5 s/nota) |
 
 ### Detekce onsetu
@@ -209,23 +327,29 @@ Obsah a délka záznamu jsou stejné. Celková doba samplování se zvyšuje o 5
 ```
 vst-get/
 ├── run-vst-get.py          # CLI entry point
-├── diagnose.py             # Diagnostika loopback zařízení
+├── diagnose.py             # Diagnostika audio zařízení
+├── requirements.txt        # Python závislosti (cross-platform)
 └── vstget/                 # Knihovna (importovatelné moduly)
+    ├── recorder.py         # Cross-platform audio recorder (CoreAudio / WASAPI)
     ├── peak_detector.py    # estimate_noise_rms(), find_onset(), find_peak(), find_fadeout()
     ├── sample_processor.py # Celý processing pipeline pro jeden vzorek
     ├── sampler.py          # record_one(), sample_all(), konstanty
-    ├── wasapi_recorder.py  # Recorder, list_loopback_devices, select_loopback_device
     ├── midi_utils.py       # open_midi_port()
     ├── wav_io.py           # save_wav()
+    ├── wasapi_recorder.py  # Legacy WASAPI-only recorder (zachován pro zpětnou kompatibilitu)
     └── audio_trim.py       # SilenceTrimmer (legacy)
 ```
 
 ## Diagnostika
 
-Pro ověření, které loopback zařízení zachytí VST audio:
+Pro ověření, které audio zařízení zachytí VST audio:
 
 ```bash
-python diagnose.py
+# macOS
+.venv/bin/python diagnose.py
+
+# Windows
+.venv\Scripts\python diagnose.py
 ```
 
-Nahraje 5 s z každého loopback zařízení sekvenčně a uloží WAV soubory do `diag_out/` pro kontrolu v Audacity.
+Nahraje 5 s z každého vstupního zařízení sekvenčně a uloží WAV soubory do `diag_out/` pro kontrolu v Audacity.
